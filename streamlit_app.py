@@ -332,10 +332,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         df_prod_pdf_raw = pd.DataFrame(columns=df_prod_raw.columns)
 
     # --- LIMPIEZA DE NOMBRES DE MÁQUINAS ---
-    # Convertimos las claves a mayúsculas y sin espacios para un cruce perfecto
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
 
-    # Filtramos la fábrica (asegurando tratar nulos y minúsculas/mayúsculas)
+    # Filtramos la fábrica
     df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
     
     # Mapeamos limpiando la columna 'Máquina'
@@ -343,7 +342,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
     
     df_prod_pdf = pd.DataFrame()
     if not df_prod_pdf_raw.empty:
-        # Cruce para la hoja de producción
         df_prod_pdf = df_prod_pdf_raw[(df_prod_pdf_raw['Máquina'].astype(str).str.contains(area, case=False, na=False)) | 
                                       (df_prod_pdf_raw['Máquina'].isin(df_pdf['Máquina'].unique()))].copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
@@ -365,7 +363,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
     
     pdf.ln(10)
     pdf.set_font("Arial", 'U', 12)
-    pdf.set_text_color(0, 102, 204) # Azul hyperlink
+    pdf.set_text_color(0, 102, 204)
     
     for g in grupos_area:
         pdf.cell(0, 8, clean_text(f"> Reporte detallado de Grupo: {g}"), ln=True, link=links_grupos[g])
@@ -379,14 +377,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
     # =========================================================
     for g in grupos_area:
         pdf.add_page()
-        pdf.set_link(links_grupos[g]) # Ancla del link
+        pdf.set_link(links_grupos[g]) 
         
         pdf.set_font("Times", 'B', 16)
         pdf.set_text_color(*theme_color)
         pdf.cell(0, 10, clean_text(f"SECCIÓN GRUPO: {g}"), ln=True, align='L', border='B')
         pdf.ln(5)
 
-        # Filtramos DF para el grupo actual
         df_pdf_g = df_pdf[df_pdf['Grupo_Máquina'] == g]
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g]
         m_g = get_metrics_direct(g, oee_target_df)
@@ -452,26 +449,31 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.set_font("Arial", '', 10)
             pdf.cell(0, 8, clean_text("Sin datos de horarios documentados para el grupo."), ln=True)
 
-        # --- 3. ANÁLISIS DE FALLAS ---
-        # Se utiliza Nivel Evento 4 para las fallas según la columna correcta
-        df_fallas_area = df_pdf_g[df_pdf_g['Nivel Evento 3'].astype(str).str.contains('FALLA', case=False)]
-        if not df_fallas_area.empty and 'Nivel Evento 4' in df_fallas_area.columns:
+        # --- 3. ANÁLISIS DE FALLAS (MODIFICADO PARA COLUMNAS CORRECTAS Y MARGENES) ---
+        # Filtramos explícitamente usando Nivel Evento 1
+        df_fallas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.contains('FALLAS', case=False, na=False)]
+        
+        if not df_fallas_area.empty and 'Nivel Evento 3' in df_fallas_area.columns:
             check_space(pdf, 110)
             print_section_title(pdf, "3. Analisis de Fallas del Grupo", theme_color)
             
-            agg_fallas = df_fallas_area.groupby('Nivel Evento 4').agg(
+            # Agrupamos por Nivel Evento 3 (ej. "002 - Saturacion")
+            agg_fallas = df_fallas_area.groupby('Nivel Evento 3').agg(
                 Tiempo=('Tiempo (Min)', 'sum'),
                 Maquinas=('Máquina', lambda x: ', '.join(sorted(set(str(m) for m in x if str(m).strip() and str(m).lower() != 'nan'))))
             ).reset_index()
             
             top_fallas = agg_fallas.sort_values('Tiempo', ascending=False).head(5)
-            top_fallas['Falla_Label'] = top_fallas.apply(lambda r: f"{r['Nivel Evento 4']} ({r['Maquinas']})" if r['Maquinas'] else r['Nivel Evento 4'], axis=1)
+            top_fallas['Falla_Label'] = top_fallas.apply(lambda r: f"{r['Nivel Evento 3']} ({r['Maquinas']})" if r['Maquinas'] else r['Nivel Evento 3'], axis=1)
             top_fallas['% Acumulado'] = (top_fallas['Tiempo'].cumsum() / top_fallas['Tiempo'].sum()) * 100
             
             fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
             fig_pareto.add_trace(go.Bar(x=top_fallas['Falla_Label'], y=top_fallas['Tiempo'], marker_color=hex_theme, text=top_fallas['Tiempo'].round(1), textposition='outside'), secondary_y=False)
             fig_pareto.add_trace(go.Scatter(x=top_fallas['Falla_Label'], y=top_fallas['% Acumulado'], mode='lines+markers', line=dict(color='red', width=3)), secondary_y=True)
-            fig_pareto.update_layout(width=800, height=450, margin=dict(t=30, b=180, l=30, r=30), plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            
+            # ESPACIADO CORREGIDO AQUÍ (margin t, b, l, r)
+            fig_pareto.update_layout(width=800, height=350, margin=dict(t=20, b=30, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            fig_pareto.update_xaxes(tickangle=-15) # Inclinamos un poco el texto si es largo para evitar solapamientos
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
                 fig_pareto.write_image(tmpfile.name, engine="kaleido")
@@ -499,7 +501,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 pdf.set_font("Arial", '', 8)
                 df_maq = df_fallas_area[df_fallas_area['Máquina'] == maq]
                 
-                cols_dup = [c for c in [col_inicio, col_fin, 'Nivel Evento 4', 'Operador'] if c is not None]
+                cols_dup = [c for c in [col_inicio, col_fin, 'Nivel Evento 3', 'Operador'] if c is not None]
                 if cols_dup: df_maq = df_maq.drop_duplicates(subset=cols_dup)
                 df_maq = df_maq.sort_values(['Fecha_Filtro', 'Tiempo (Min)'], ascending=[False, False])
                 
@@ -510,7 +512,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                     pdf.cell(20, 6, clean_text(val_fecha), border='B', align='C')
                     pdf.cell(15, 6, clean_text(val_inicio), border='B', align='C')
                     pdf.cell(15, 6, clean_text(val_fin), border='B', align='C')
-                    pdf.cell(80, 6, clean_text(str(row['Nivel Evento 4'])[:55]), border='B')
+                    # Mostramos el nombre de la falla desde Nivel Evento 3
+                    pdf.cell(80, 6, clean_text(str(row['Nivel Evento 3'])[:55]), border='B')
                     pdf.cell(15, 6, clean_text(f"{row['Tiempo (Min)']:.1f}"), border='B', align='C')
                     pdf.cell(45, 6, clean_text(str(row['Operador'])[:25]), border='B', ln=True)
                 pdf.ln(3) 
@@ -527,7 +530,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             print_section_title(pdf, "4. Relacion Produccion vs Parada", theme_color)
             df_pdf_g['Tipo'] = df_pdf_g['Evento'].apply(lambda x: 'Producción' if 'Producción' in str(x) else 'Parada')
             fig_pie = px.pie(df_pdf_g, values='Tiempo (Min)', names='Tipo', hole=0.4, color='Tipo', color_discrete_map={'Producción':hex_theme, 'Parada':'#D62728'})
-            fig_pie.update_layout(width=400, height=250, margin=dict(t=20, b=20, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)')
+            
+            # ESPACIADO CORREGIDO AQUÍ
+            fig_pie.update_layout(width=400, height=250, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile2:
                 fig_pie.write_image(tmpfile2.name, engine="kaleido")
                 pdf.image(tmpfile2.name, w=100)
@@ -540,7 +545,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             print_section_title(pdf, "5. Produccion por Maquina", theme_color)
             prod_maq = df_prod_pdf_g.groupby('Máquina')[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index()
             fig_prod = px.bar(prod_maq, x='Máquina', y=['Buenas', 'Retrabajo', 'Observadas'], barmode='stack', color_discrete_sequence=chart_bars, text_auto=True)
-            fig_prod.update_layout(width=800, height=350, margin=dict(t=40, b=100, l=40, r=40), plot_bgcolor='rgba(0,0,0,0)')
+            
+            # ESPACIADO CORREGIDO AQUÍ
+            fig_prod.update_layout(width=800, height=300, margin=dict(t=20, b=40, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)')
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile3:
                 fig_prod.write_image(tmpfile3.name, engine="kaleido")
@@ -654,7 +661,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.cell(0, 8, clean_text("Faltan columnas de base de datos para generar este cuadro."), ln=True)
 
     # =========================================================
-    # TABLAS DE PROMEDIO: BAÑO Y REFRIGERIO (GENERAL)
+    # TABLAS DE PROMEDIO: BAÑO Y REFRIGERIO (MODIFICADO PARA FILTRAR EN NIVEL 1)
     # =========================================================
     pdf.set_link(link_tiempos) 
     
@@ -662,12 +669,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
-        req_cols = ['Operador', 'Tiempo (Min)', 'Nivel Evento 4']
+        # Filtramos explícitamente usando 'Nivel Evento 1' como solicitaste
+        req_cols = ['Operador', 'Tiempo (Min)', 'Nivel Evento 1']
         if all(col in df_pdf.columns for col in req_cols):
             df_temp = pd.DataFrame({
                 'Operario': df_pdf['Operador'],
                 'Tiempo': pd.to_numeric(df_pdf['Tiempo (Min)'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0),
-                'Evento': df_pdf['Nivel Evento 4'].astype(str)
+                'Evento': df_pdf['Nivel Evento 1'].astype(str)
             })
             df_filtrado = df_temp[df_temp['Evento'].str.contains(regex_keyword, case=False, na=False)]
             
@@ -692,7 +700,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
         else:
             pdf.set_font("Arial", '', 10)
-            pdf.cell(0, 8, clean_text("Faltan las columnas 'Operador', 'Tiempo (Min)' o 'Nivel Evento 4' en los datos."), ln=True)
+            pdf.cell(0, 8, clean_text("Faltan las columnas 'Operador', 'Tiempo (Min)' o 'Nivel Evento 1' en los datos."), ln=True)
 
     agregar_tabla_tiempos("Tiempo Promedio de Bano por Operario (Planta)", "BAÑO|BANO")
     agregar_tabla_tiempos("Tiempo Promedio de Refrigerio por Operario (Planta)", "REFRIGERIO")
