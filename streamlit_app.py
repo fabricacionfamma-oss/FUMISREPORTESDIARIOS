@@ -332,14 +332,22 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         df_pdf_raw = pd.DataFrame(columns=df_raw.columns)
         df_prod_pdf_raw = pd.DataFrame(columns=df_prod_raw.columns)
 
-    df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].str.contains(area, case=False, na=False)].copy()
-    df_pdf['Grupo_Máquina'] = df_pdf['Máquina'].map(MAQUINAS_MAP).fillna('Otro')
+    # --- LIMPIEZA DE NOMBRES DE MÁQUINAS ---
+    # Convertimos las claves a mayúsculas y sin espacios para un cruce perfecto
+    mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
+
+    # Filtramos la fábrica (asegurando tratar nulos y minúsculas/mayúsculas)
+    df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
+    
+    # Mapeamos limpiando la columna 'Máquina'
+    df_pdf['Grupo_Máquina'] = df_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
     
     df_prod_pdf = pd.DataFrame()
     if not df_prod_pdf_raw.empty:
-        df_prod_pdf = df_prod_pdf_raw[(df_prod_pdf_raw['Máquina'].str.contains(area, case=False, na=False)) | 
+        # Cruce para la hoja de producción
+        df_prod_pdf = df_prod_pdf_raw[(df_prod_pdf_raw['Máquina'].astype(str).str.contains(area, case=False, na=False)) | 
                                       (df_prod_pdf_raw['Máquina'].isin(df_pdf['Máquina'].unique()))].copy()
-        df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].map(MAQUINAS_MAP).fillna('Otro')
+        df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
     pdf = ReportePDF(area, label_reporte, theme_color)
     pdf.add_page()
@@ -446,7 +454,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.cell(0, 8, clean_text("Sin datos de horarios documentados para el grupo."), ln=True)
 
         # --- 3. ANÁLISIS DE FALLAS ---
-        # AQUI USAMOS "Nivel Evento 4" SEGÚN TU LISTA DE COLUMNAS
+        # Se utiliza Nivel Evento 4 para las fallas según la columna correcta
         df_fallas_area = df_pdf_g[df_pdf_g['Nivel Evento 3'].astype(str).str.contains('FALLA', case=False)]
         if not df_fallas_area.empty and 'Nivel Evento 4' in df_fallas_area.columns:
             check_space(pdf, 110)
@@ -648,7 +656,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
 
     # =========================================================
     # TABLAS DE PROMEDIO: BAÑO Y REFRIGERIO (GENERAL)
-    # AQUI USAMOS LOS NOMBRES EXACTOS DE LAS COLUMNAS
     # =========================================================
     pdf.set_link(link_tiempos) 
     
@@ -656,7 +663,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
-        # Validamos que las columnas necesarias existan
         req_cols = ['Operador', 'Tiempo (Min)', 'Nivel Evento 4']
         if all(col in df_pdf.columns for col in req_cols):
             df_temp = pd.DataFrame({
