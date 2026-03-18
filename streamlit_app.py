@@ -11,7 +11,7 @@ from fpdf import FPDF
 # 0. DICCIONARIO DE MÁQUINAS Y GRUPOS FUMISCOR
 # ==========================================
 MAQUINAS_MAP = {
-    # === ESTAMPADO ===
+    # === ESTAMPADO (Base actual según imagen) ===
     "P-023": "PRENSAS PROGRESIVAS", "P-024": "PRENSAS PROGRESIVAS", "P-025": "PRENSAS PROGRESIVAS",
     "P-026": "PRENSAS PROGRESIVAS GRANDES", "P-027": "PRENSAS PROGRESIVAS GRANDES",
     "BAL-002": "BALANCIN", "BAL-003": "BALANCIN", "BAL-005": "BALANCIN", "BAL-006": "BALANCIN",
@@ -19,7 +19,12 @@ MAQUINAS_MAP = {
     "P-011": "HIDRAULICAS", "P-016": "HIDRAULICAS", "P-017": "HIDRAULICAS", "P-018": "HIDRAULICAS",
     "P-015": "MECANICAS", "P-019": "MECANICAS", "P-020": "MECANICAS", "P-021": "MECANICAS", "P-022": "MECANICAS",
     "GOF01": "Gofradora",
-    # === SOLDADURA ===
+    # --- PREVISIÓN FUTURAS ESTAMPADO ---
+    "P-028": "PRENSAS PROGRESIVAS GRANDES", "P-029": "PRENSAS PROGRESIVAS GRANDES", "P-030": "PRENSAS PROGRESIVAS GRANDES",
+    "BAL-011": "BALANCIN", "BAL-012": "BALANCIN", "BAL-013": "BALANCIN", "BAL-014": "BALANCIN", "BAL-015": "BALANCIN",
+    "P-012": "HIDRAULICAS", "P-013": "HIDRAULICAS", "P-014": "HIDRAULICAS",
+
+    # === SOLDADURA (Base actual según imagen) ===
     "SOP-003": "PRP", "SOP-005": "PRP", "SOP-008": "PRP", "SOP-009": "PRP", "SOP-010": "PRP",
     "SOP-017": "PRP", "SOP-018": "PRP", "SOP-019": "PRP", "SOP-020": "PRP", "SOP-022": "PRP",
     "SOP-023": "PRP", "SOP-024": "PRP", "SOP-025": "PRP",
@@ -29,7 +34,16 @@ MAQUINAS_MAP = {
     "Cel3 - Rob14 - HANGERS": "CELDA SOLDADURA", "Cel4 - Rob6 - DOB TORCHA": "CELDA SOLDADURA",
     "Cel5 - Rob4 - Respaldo 60/40": "CELDA SOLDADURA", "HANGERS NISSAN": "CELDA SOLDADURA",
     "Celda 01 Fumis": "CELDA SOLDADURA RENAULT", "Celda 02 Fumis": "CELDA SOLDADURA RENAULT",
-    "Celda 03 Fumis": "CELDA SOLDADURA RENAULT"
+    "Celda 03 Fumis": "CELDA SOLDADURA RENAULT", "Celda 04 Fumis": "CELDA SOLDADURA RENAULT",
+    "Celda 05 Fumis": "CELDA SOLDADURA RENAULT", "Celda 06 Fumis": "CELDA SOLDADURA RENAULT",
+    "Celda 07 Fumis": "CELDA SOLDADURA RENAULT", "Celda 08 Fumis": "CELDA SOLDADURA RENAULT",
+    "Celda 09 Fumis": "CELDA SOLDADURA RENAULT", "Celda 10 Fumis": "CELDA SOLDADURA RENAULT",
+    "Celda 11 Fumis": "CELDA SOLDADURA RENAULT",
+    # --- PREVISIÓN FUTURAS SOLDADURA ---
+    "Celda 12 Fumis": "CELDA SOLDADURA RENAULT", "Celda 13 Fumis": "CELDA SOLDADURA RENAULT", 
+    "Celda 14 Fumis": "CELDA SOLDADURA RENAULT", "Celda 15 Fumis": "CELDA SOLDADURA RENAULT",
+    "SOP-026": "PRP", "SOP-027": "PRP", "SOP-028": "PRP", "SOP-029": "PRP", "SOP-030": "PRP",
+    "DOB-007": "DOBLADORA", "DOB-008": "DOBLADORA", "DOB-009": "DOBLADORA", "DOB-010": "DOBLADORA"
 }
 
 GRUPOS_ESTAMPADO = ['PRENSAS PROGRESIVAS', 'PRENSAS PROGRESIVAS GRANDES', 'BALANCIN', 'HIDRAULICAS', 'MECANICAS', 'Gofradora']
@@ -449,15 +463,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.set_font("Arial", '', 10)
             pdf.cell(0, 8, clean_text("Sin datos de horarios documentados para el grupo."), ln=True)
 
-        # --- 3. ANÁLISIS DE FALLAS (MODIFICADO PARA COLUMNAS CORRECTAS Y MARGENES) ---
-        # Filtramos explícitamente usando Nivel Evento 1
+        # --- 3. ANÁLISIS DE FALLAS (PARETO OPTIMIZADO) ---
         df_fallas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.contains('FALLAS', case=False, na=False)]
         
         if not df_fallas_area.empty and 'Nivel Evento 3' in df_fallas_area.columns:
             check_space(pdf, 110)
             print_section_title(pdf, "3. Analisis de Fallas del Grupo", theme_color)
             
-            # Agrupamos por Nivel Evento 3 (ej. "002 - Saturacion")
             agg_fallas = df_fallas_area.groupby('Nivel Evento 3').agg(
                 Tiempo=('Tiempo (Min)', 'sum'),
                 Maquinas=('Máquina', lambda x: ', '.join(sorted(set(str(m) for m in x if str(m).strip() and str(m).lower() != 'nan'))))
@@ -471,9 +483,15 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             fig_pareto.add_trace(go.Bar(x=top_fallas['Falla_Label'], y=top_fallas['Tiempo'], marker_color=hex_theme, text=top_fallas['Tiempo'].round(1), textposition='outside'), secondary_y=False)
             fig_pareto.add_trace(go.Scatter(x=top_fallas['Falla_Label'], y=top_fallas['% Acumulado'], mode='lines+markers', line=dict(color='red', width=3)), secondary_y=True)
             
-            # ESPACIADO CORREGIDO AQUÍ (margin t, b, l, r)
-            fig_pareto.update_layout(width=800, height=350, margin=dict(t=20, b=30, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
-            fig_pareto.update_xaxes(tickangle=-15) # Inclinamos un poco el texto si es largo para evitar solapamientos
+            # --- AJUSTE DE MARGENES PARA QUE RESPIRE EL GRÁFICO ---
+            fig_pareto.update_layout(
+                width=800, 
+                height=500, # Más alto
+                margin=dict(t=20, b=160, l=20, r=20), # Margen inferior mucho más grande (b=160)
+                plot_bgcolor='rgba(0,0,0,0)', 
+                showlegend=False
+            )
+            fig_pareto.update_xaxes(tickangle=-45) # Letras en diagonal
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
                 fig_pareto.write_image(tmpfile.name, engine="kaleido")
@@ -512,7 +530,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                     pdf.cell(20, 6, clean_text(val_fecha), border='B', align='C')
                     pdf.cell(15, 6, clean_text(val_inicio), border='B', align='C')
                     pdf.cell(15, 6, clean_text(val_fin), border='B', align='C')
-                    # Mostramos el nombre de la falla desde Nivel Evento 3
                     pdf.cell(80, 6, clean_text(str(row['Nivel Evento 3'])[:55]), border='B')
                     pdf.cell(15, 6, clean_text(f"{row['Tiempo (Min)']:.1f}"), border='B', align='C')
                     pdf.cell(45, 6, clean_text(str(row['Operador'])[:25]), border='B', ln=True)
@@ -531,7 +548,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             df_pdf_g['Tipo'] = df_pdf_g['Evento'].apply(lambda x: 'Producción' if 'Producción' in str(x) else 'Parada')
             fig_pie = px.pie(df_pdf_g, values='Tiempo (Min)', names='Tipo', hole=0.4, color='Tipo', color_discrete_map={'Producción':hex_theme, 'Parada':'#D62728'})
             
-            # ESPACIADO CORREGIDO AQUÍ
             fig_pie.update_layout(width=400, height=250, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile2:
                 fig_pie.write_image(tmpfile2.name, engine="kaleido")
@@ -546,7 +562,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             prod_maq = df_prod_pdf_g.groupby('Máquina')[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index()
             fig_prod = px.bar(prod_maq, x='Máquina', y=['Buenas', 'Retrabajo', 'Observadas'], barmode='stack', color_discrete_sequence=chart_bars, text_auto=True)
             
-            # ESPACIADO CORREGIDO AQUÍ
             fig_prod.update_layout(width=800, height=300, margin=dict(t=20, b=40, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)')
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile3:
@@ -661,7 +676,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.cell(0, 8, clean_text("Faltan columnas de base de datos para generar este cuadro."), ln=True)
 
     # =========================================================
-    # TABLAS DE PROMEDIO: BAÑO Y REFRIGERIO (MODIFICADO PARA FILTRAR EN NIVEL 1)
+    # TABLAS DE PROMEDIO: BAÑO Y REFRIGERIO
     # =========================================================
     pdf.set_link(link_tiempos) 
     
@@ -669,7 +684,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
-        # Filtramos explícitamente usando 'Nivel Evento 1' como solicitaste
         req_cols = ['Operador', 'Tiempo (Min)', 'Nivel Evento 1']
         if all(col in df_pdf.columns for col in req_cols):
             df_temp = pd.DataFrame({
