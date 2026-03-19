@@ -456,30 +456,37 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 min_i = merged[0][0]
                 max_f = merged[-1][1]
                 
-                tiempos_list.append({'Máquina': maq, 'Inicio': min_i, 'Fin': max_f, 'Total': total_active})
+                # Tiempo No Registrado por máquina (Tiempo Bruto - Apertura Neta)
+                tiempo_bruto = max_f - min_i
+                unregistered_time = max(0, tiempo_bruto - total_active)
                 
-            tiempo_teorico_grupo = sum(t['Total'] for t in tiempos_list) if tiempos_list else 0
+                tiempos_list.append({'Máquina': maq, 'Inicio': min_i, 'Fin': max_f, 'Total': total_active, 'NoReg': unregistered_time})
+                
+            # Para la seccion 4 guardamos el tiempo de apertura a cierre (bruto) para que deduzca los no registrados del gráfico general
+            tiempo_teorico_grupo = sum((t['Fin'] - t['Inicio']) for t in tiempos_list) if tiempos_list else 0
             
             df_horarios = pd.DataFrame(tiempos_list)
             
             if not df_horarios.empty:
                 df_res = df_horarios.sort_values('Máquina') if p_tipo == "Diario" else df_horarios.groupby('Máquina').mean().reset_index().sort_values('Máquina')
-                col_h1, col_h2, col_h3 = ("Hora Inicio", "Hora Cierre", "Apertura Neta") if p_tipo == "Diario" else ("Inicio Prom.", "Cierre Prom.", "Apertura Neta Prom.")
+                col_h1, col_h2, col_h3, col_h4 = ("Hora Inicio", "Hora Cierre", "Apertura Neta", "No Registrado") if p_tipo == "Diario" else ("Inicio Prom.", "Cierre Prom.", "Apertura Neta Prom.", "No Reg. Prom.")
                 
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.cell(60, 7, clean_text("Maquina"), border=1, fill=True)
-                pdf.cell(45, 7, clean_text(col_h1), border=1, align='C', fill=True)
-                pdf.cell(45, 7, clean_text(col_h2), border=1, align='C', fill=True)
-                pdf.cell(40, 7, clean_text(col_h3), border=1, align='C', ln=True, fill=True)
+                pdf.cell(46, 7, clean_text("Maquina"), border=1, fill=True)
+                pdf.cell(28, 7, clean_text(col_h1), border=1, align='C', fill=True)
+                pdf.cell(28, 7, clean_text(col_h2), border=1, align='C', fill=True)
+                pdf.cell(44, 7, clean_text(col_h3), border=1, align='C', fill=True)
+                pdf.cell(44, 7, clean_text(col_h4), border=1, align='C', ln=True, fill=True)
                 
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 9)
                 for _, r in df_res.iterrows():
-                    pdf.cell(60, 7, clean_text(str(r['Máquina'])[:30]), border=1)
-                    pdf.cell(45, 7, clean_text(mins_to_time_str(r['Inicio'])), border=1, align='C')
-                    pdf.cell(45, 7, clean_text(mins_to_time_str(r['Fin'])), border=1, align='C')
-                    pdf.cell(40, 7, clean_text(mins_to_duration_str(r['Total'])), border=1, align='C', ln=True)
+                    pdf.cell(46, 7, clean_text(str(r['Máquina'])[:22]), border=1)
+                    pdf.cell(28, 7, clean_text(mins_to_time_str(r['Inicio'])), border=1, align='C')
+                    pdf.cell(28, 7, clean_text(mins_to_time_str(r['Fin'])), border=1, align='C')
+                    pdf.cell(44, 7, clean_text(mins_to_duration_str(r['Total'])), border=1, align='C')
+                    pdf.cell(44, 7, clean_text(mins_to_duration_str(r['NoReg'])), border=1, align='C', ln=True)
             else:
                 pdf.set_font("Arial", '', 10)
                 pdf.cell(0, 8, clean_text("No hay datos de horarios validos en este grupo."), ln=True)
@@ -492,7 +499,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         df_paradas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PARADA PROGRAMADA', na=False)]
         
         tiene_fallas = not df_fallas_area.empty and 'Nivel Evento 3' in df_fallas_area.columns
-        tiene_paradas = not df_paradas_area.empty and 'Nivel Evento 3' in df_paradas_area.columns
+        tiene_paradas = not df_paradas_area.empty and 'Nivel Evento 2' in df_paradas_area.columns
 
         if tiene_fallas or tiene_paradas:
             check_space(pdf, 110)
@@ -526,8 +533,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             maquinas_con_eventos = sorted(set(df_fallas_area['Máquina'].unique() if tiene_fallas else []).union(
                                           set(df_paradas_area['Máquina'].unique() if tiene_paradas else [])))
             
-            # Función Helper para no repetir código de tablas
-            def dibujar_tabla_eventos(df_subset):
+            # Función Helper adaptada para usar diferentes columnas de detalle
+            def dibujar_tabla_eventos(df_subset, col_detalle='Nivel Evento 3'):
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 8)
                 pdf.cell(20, 7, clean_text("Fecha"), border=1, align='C', fill=True)
@@ -540,7 +547,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 8)
                 
-                cols_dup = [c for c in [col_inicio, col_fin, 'Nivel Evento 3', 'Operador'] if c is not None]
+                cols_dup = [c for c in [col_inicio, col_fin, col_detalle, 'Operador'] if c is not None]
                 if cols_dup: df_subset = df_subset.drop_duplicates(subset=cols_dup)
                 df_subset = df_subset.sort_values(['Fecha_Filtro', 'Tiempo (Min)'], ascending=[False, False])
                 
@@ -548,7 +555,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                     val_fecha = pd.to_datetime(row['Fecha_Filtro']).strftime('%d/%m') if pd.notna(row['Fecha_Filtro']) else "-"
                     val_inicio = str(row[col_inicio])[:5] if col_inicio and str(row[col_inicio]) != 'nan' else "-"
                     val_fin = str(row[col_fin])[:5] if col_fin and str(row[col_fin]) != 'nan' else "-"
-                    detalle = str(row['Nivel Evento 3']) if 'Nivel Evento 3' in row and pd.notna(row['Nivel Evento 3']) else str(row.get('Evento', '-'))
+                    
+                    # Usa la columna pasada por parámetro para el detalle (Nivel Evento 3 o Nivel Evento 2)
+                    detalle = str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else str(row.get('Evento', '-'))
                     
                     pdf.cell(20, 6, clean_text(val_fecha), border='B', align='C')
                     pdf.cell(15, 6, clean_text(val_inicio), border='B', align='C')
@@ -564,22 +573,22 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 pdf.set_text_color(50, 50, 50)
                 pdf.cell(0, 8, clean_text(f"Maquina: {maq}"), ln=True)
                 
-                # Tabla 1: Fallas
+                # Tabla 1: Fallas (Usa Nivel Evento 3)
                 df_maq_fallas = df_fallas_area[df_fallas_area['Máquina'] == maq] if tiene_fallas else pd.DataFrame()
                 if not df_maq_fallas.empty:
                     pdf.set_font("Arial", 'B', 8)
                     pdf.set_text_color(*theme_color)
                     pdf.cell(0, 6, clean_text(">> Fallas Registradas:"), ln=True)
-                    dibujar_tabla_eventos(df_maq_fallas)
+                    dibujar_tabla_eventos(df_maq_fallas, 'Nivel Evento 3')
                 
-                # Tabla 2: Paradas Programadas
+                # Tabla 2: Paradas Programadas (Usa Nivel Evento 2)
                 df_maq_paradas = df_paradas_area[df_paradas_area['Máquina'] == maq] if tiene_paradas else pd.DataFrame()
                 if not df_maq_paradas.empty:
                     check_space(pdf, 20)
                     pdf.set_font("Arial", 'B', 8)
-                    pdf.set_text_color(200, 150, 0) # Color naranja para distinguir la parada
+                    pdf.set_text_color(200, 150, 0) # Color naranja
                     pdf.cell(0, 6, clean_text(">> Paradas Programadas Registradas:"), ln=True)
-                    dibujar_tabla_eventos(df_maq_paradas)
+                    dibujar_tabla_eventos(df_maq_paradas, 'Nivel Evento 2')
 
         else:
             check_space(pdf, 25)
@@ -599,7 +608,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             tiempo_parada = df_pdf_g[df_pdf_g['Tipo'] == 'Parada']['Tiempo (Min)'].sum()
             tiempo_registrado = tiempo_produccion + tiempo_parada
             
-            # El tiempo no registrado es la diferencia entre el turno abierto y lo registrado.
+            # El tiempo no registrado es la diferencia entre el turno abierto (Inicio a Cierre total) y lo registrado
             tiempo_no_registrado = max(0, tiempo_teorico_grupo - tiempo_registrado)
             
             # Gráfico Circular
