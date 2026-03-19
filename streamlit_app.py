@@ -425,6 +425,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         col_inicio = next((c for c in df_pdf_g.columns if 'inicio' in c.lower() or 'desde' in c.lower()), None)
         col_fin = next((c for c in df_pdf_g.columns if 'fin' in c.lower() or 'hasta' in c.lower()), None)
         
+        tiempo_teorico_grupo = 0
+        
         if col_inicio and col_fin and not df_pdf_g.empty:
             tiempos_list = []
             for (maq, fecha), grp in df_pdf_g.groupby(['Máquina', 'Fecha_Filtro']):
@@ -436,6 +438,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 if max_f < min_i and (min_i - max_f) > 720: max_f += 1440
                 tiempos_list.append({'Máquina': maq, 'Inicio': min_i, 'Fin': max_f, 'Total': max_f - min_i})
                 
+            tiempo_teorico_grupo = sum(t['Total'] for t in tiempos_list) if tiempos_list else 0
+            
             df_horarios = pd.DataFrame(tiempos_list)
             
             if not df_horarios.empty:
@@ -543,15 +547,67 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
 
         # --- 4. PRODUCCIÓN VS PARADA ---
         if not df_pdf_g.empty:
-            check_space(pdf, 70)
+            check_space(pdf, 75)
             print_section_title(pdf, "4. Relacion Produccion vs Parada", theme_color)
             df_pdf_g['Tipo'] = df_pdf_g['Evento'].apply(lambda x: 'Producción' if 'Producción' in str(x) else 'Parada')
-            fig_pie = px.pie(df_pdf_g, values='Tiempo (Min)', names='Tipo', hole=0.4, color='Tipo', color_discrete_map={'Producción':hex_theme, 'Parada':'#D62728'})
             
+            # --- CALCULOS DE TIEMPOS ---
+            tiempo_produccion = df_pdf_g[df_pdf_g['Tipo'] == 'Producción']['Tiempo (Min)'].sum()
+            tiempo_parada = df_pdf_g[df_pdf_g['Tipo'] == 'Parada']['Tiempo (Min)'].sum()
+            tiempo_registrado = tiempo_produccion + tiempo_parada
+            
+            # El tiempo no registrado es la diferencia entre el turno abierto y lo registrado.
+            tiempo_no_registrado = max(0, tiempo_teorico_grupo - tiempo_registrado)
+            
+            # Gráfico Circular
+            fig_pie = px.pie(df_pdf_g, values='Tiempo (Min)', names='Tipo', hole=0.4, color='Tipo', color_discrete_map={'Producción':hex_theme, 'Parada':'#D62728'})
             fig_pie.update_layout(width=400, height=250, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)')
+            
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile2:
                 fig_pie.write_image(tmpfile2.name, engine="kaleido")
-                pdf.image(tmpfile2.name, w=100)
+                
+                # Guardamos la posición "Y" antes de poner la imagen para poner texto al lado
+                y_before_img = pdf.get_y()
+                
+                # Colocamos la imagen a la izquierda
+                pdf.image(tmpfile2.name, x=10, y=y_before_img, w=100)
+                
+                # === TABLA DE RESUMEN AL LADO DERECHO ===
+                pdf.set_xy(115, y_before_img + 12)
+                pdf.set_font("Arial", 'B', 11)
+                pdf.set_text_color(*theme_color)
+                pdf.cell(80, 7, clean_text("Resumen de Tiempos:"), ln=True)
+                
+                # Producción
+                pdf.set_x(115)
+                pdf.set_font("Arial", 'B', 9)
+                pdf.set_text_color(33, 195, 84) # Verde
+                pdf.cell(45, 7, clean_text("Total Produccion:"), border=0)
+                pdf.set_font("Arial", '', 9)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(30, 7, clean_text(f"{mins_to_duration_str(tiempo_produccion)}"), border=0, ln=True)
+                
+                # Parada
+                pdf.set_x(115)
+                pdf.set_font("Arial", 'B', 9)
+                pdf.set_text_color(220, 20, 20) # Rojo
+                pdf.cell(45, 7, clean_text("Total Parada:"), border=0)
+                pdf.set_font("Arial", '', 9)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(30, 7, clean_text(f"{mins_to_duration_str(tiempo_parada)}"), border=0, ln=True)
+                
+                # No Registrado
+                pdf.set_x(115)
+                pdf.set_font("Arial", 'B', 9)
+                pdf.set_text_color(200, 150, 0) # Naranja
+                pdf.cell(45, 7, clean_text("Tiempo No Registrado:"), border=0)
+                pdf.set_font("Arial", '', 9)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(30, 7, clean_text(f"{mins_to_duration_str(tiempo_no_registrado)}"), border=0, ln=True)
+                
+                # Setear el cursor de escritura debajo de la imagen (aprox 65 mm) para que la Sección 5 no se sobreescriba.
+                pdf.set_y(y_before_img + 65)
+                
                 os.remove(tmpfile2.name)
             pdf.ln(3)
         
