@@ -416,14 +416,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         setup_table_row(pdf)
         pdf.set_font("Arial", '', 8)
         
-        # ORDEN CRONOLÓGICO: De más antiguo a más reciente
-        sort_cols = ['Fecha_Filtro']
+        # CORRECCIÓN DE ORDEN CRONOLÓGICO: Parseando a minutos reales
         if col_inicio and col_inicio in df_subset.columns:
-            sort_cols.append(col_inicio)
+            # Crea una columna oculta con el tiempo en formato matemático para ordenar bien
+            df_subset['_sort_time'] = df_subset[col_inicio].apply(lambda x: parse_time_to_mins(x) if pd.notna(x) else 9999)
+            df_subset = df_subset.sort_values(['Fecha_Filtro', '_sort_time'], ascending=[True, True])
         else:
-            sort_cols.append('Tiempo (Min)')
-            
-        df_subset = df_subset.sort_values(sort_cols, ascending=[True] * len(sort_cols))
+            df_subset = df_subset.sort_values(['Fecha_Filtro', 'Tiempo (Min)'], ascending=[True, False])
         
         for _, row in df_subset.iterrows():
             val_fecha = pd.to_datetime(row['Fecha_Filtro']).strftime('%d/%m') if pd.notna(row['Fecha_Filtro']) else "-"
@@ -627,19 +626,19 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 agg_f = df_maq_fallas.groupby('Nivel Evento 3')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
                 total_falla_maq = t_falla if t_falla > 0 else 1
                 
-                # Truncamos la etiqueta a 35 caracteres para que no desborde y cortamos si es muy largo
-                agg_f['Nivel Evento 3'] = agg_f['Nivel Evento 3'].apply(lambda x: str(x)[:35] + '...' if len(str(x)) > 35 else str(x))
+                # Truncamos la etiqueta para que no sea excesivamente larga
+                agg_f['Nivel Evento 3'] = agg_f['Nivel Evento 3'].apply(lambda x: str(x)[:30] + '...' if len(str(x)) > 30 else str(x))
                 
                 # Preparamos las etiquetas
                 agg_f['Porcentaje'] = (agg_f['Tiempo (Min)'] / total_falla_maq) * 100
                 agg_f['Label'] = agg_f.apply(lambda r: f"{r['Tiempo (Min)']:.0f} min ({r['Porcentaje']:.1f}%)", axis=1)
                 
-                # Creamos el minigráfico horizontal con GRAN MARGEN IZQUIERDO (l=220)
+                # CORRECCIÓN DE MARGEN: Se aumentó l=260 para que el texto nunca se corte
                 fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Nivel Evento 3', orientation='h', text='Label')
                 fig_top3.update_traces(marker_color='#d9534f', textposition='outside')
                 fig_top3.update_layout(
                     height=140, width=700,
-                    margin=dict(t=5, b=5, l=220, r=80), # 220px para el texto de la izquierda, 80 para la etiqueta derecha
+                    margin=dict(t=5, b=5, l=260, r=80), 
                     plot_bgcolor='rgba(0,0,0,0)', 
                     xaxis=dict(visible=False),
                     yaxis=dict(title='', autorange="reversed", tickfont=dict(size=12, color='black'))
