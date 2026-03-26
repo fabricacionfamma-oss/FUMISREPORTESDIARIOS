@@ -390,7 +390,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
     col_inicio = next((c for c in df_pdf.columns if 'inicio' in c.lower() or 'desde' in c.lower()), None)
     col_fin = next((c for c in df_pdf.columns if 'fin' in c.lower() or 'hasta' in c.lower()), None)
 
-    # Función auxiliar para dibujar las subtablas detalladas (con estilo original)
+    # Función auxiliar para dibujar las subtablas detalladas (con estilo original y orden cronológico)
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, mostrar_categoria=False):
         setup_table_header(pdf, theme_color)
         pdf.set_font("Arial", 'B', 8)
@@ -401,7 +401,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.cell(w_f, 7, "Fecha", border=1, align='C', fill=True)
             pdf.cell(w_i, 7, "Ini.", border=1, align='C', fill=True)
             pdf.cell(w_f2, 7, "Fin", border=1, align='C', fill=True)
-            pdf.cell(w_c, 7, "Categoria", border=1, align='C', fill=True)
+            pdf.cell(w_c, 7, "Categoria", border=1, align='L', fill=True)
             pdf.cell(w_d, 7, "Detalle", border=1, align='C', fill=True)
             pdf.cell(w_m, 7, "Min", border=1, align='C', fill=True)
             pdf.cell(w_o, 7, "Operador", border=1, align='C', ln=True, fill=True)
@@ -417,7 +417,14 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         setup_table_row(pdf)
         pdf.set_font("Arial", '', 8)
         
-        df_subset = df_subset.sort_values(['Fecha_Filtro', 'Tiempo (Min)'], ascending=[False, False])
+        # ORDEN CRONOLÓGICO: De más antiguo a más reciente
+        sort_cols = ['Fecha_Filtro']
+        if col_inicio and col_inicio in df_subset.columns:
+            sort_cols.append(col_inicio)
+        else:
+            sort_cols.append('Tiempo (Min)')
+            
+        df_subset = df_subset.sort_values(sort_cols, ascending=[True] * len(sort_cols))
         
         for _, row in df_subset.iterrows():
             val_fecha = pd.to_datetime(row['Fecha_Filtro']).strftime('%d/%m') if pd.notna(row['Fecha_Filtro']) else "-"
@@ -429,11 +436,11 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             detalle_str = str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else str(row.get('Evento', '-'))
             
             if mostrar_categoria:
-                categoria_str = str(row.get('Nivel Evento 2', '-'))[:15]
+                categoria_str = " " + str(row.get('Nivel Evento 2', '-'))[:15] # Espacio inicial para separar del borde
                 pdf.cell(w_f, 6, val_fecha, border='B', align='C')
                 pdf.cell(w_i, 6, val_inicio, border='B', align='C')
                 pdf.cell(w_f2, 6, val_fin, border='B', align='C')
-                pdf.cell(w_c, 6, clean_text(categoria_str), border='B', align='C')
+                pdf.cell(w_c, 6, clean_text(categoria_str), border='B', align='L') # Alineado a la izquierda
                 pdf.cell(w_d, 6, clean_text(detalle_str[:60]), border='B')
                 pdf.cell(w_m, 6, minutos, border='B', align='C')
                 pdf.cell(w_o, 6, clean_text(operador), border='B', ln=True)
@@ -546,7 +553,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.set_font("Arial", '', 10)
             pdf.cell(0, 8, clean_text("Sin datos de horarios documentados para el grupo."), ln=True)
 
-        # --- 3. ANÁLISIS DE FALLAS Y PARADAS POR MÁQUINA (FORMATO ORIGINAL ESTILIZADO) ---
+        # --- 3. ANÁLISIS DE FALLAS Y PARADAS POR MÁQUINA ---
         check_space(pdf, 40)
         print_section_title(pdf, "3. Analisis de Fallas y Paradas por Maquina", theme_color)
         
@@ -573,10 +580,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             hubo_eventos_en_grupo = True
             check_space(pdf, 60)
             
-            # Título de la máquina
-            pdf.set_font("Arial", 'B', 11)
-            pdf.set_text_color(*theme_color)
-            pdf.cell(0, 8, clean_text(f">> MAQUINA: {maq}"), ln=True)
+            # Título de la máquina DESTACADO
+            pdf.ln(5)
+            pdf.set_font("Arial", 'B', 12)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_fill_color(*theme_color)
+            pdf.cell(0, 9, clean_text(f"  MÁQUINA: {maq}"), border=0, ln=True, fill=True)
+            pdf.ln(2)
             
             # Fila Resumen de Tiempos (con el estilo original de tablas)
             setup_table_header(pdf, theme_color)
@@ -592,9 +602,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             pdf.cell(64, 7, clean_text(mins_to_duration_str(t_pp)), border=1, align='C', ln=True)
             pdf.ln(2)
             
-            # --- TOP 3 Fallas (Gráfico de Barras) ---
+            # --- TOP 3 Fallas (Gráfico de Barras Pequeño) ---
             if not df_maq_fallas.empty and 'Nivel Evento 3' in df_maq_fallas.columns:
-                check_space(pdf, 60) # Espacio para el gráfico
+                check_space(pdf, 60)
                 pdf.set_font("Arial", 'B', 10)
                 pdf.set_text_color(220, 20, 20)
                 pdf.cell(0, 6, clean_text("Top 3 Fallas (por tiempo):"), ln=True)
@@ -606,20 +616,20 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 agg_f['Porcentaje'] = (agg_f['Tiempo (Min)'] / total_falla_maq) * 100
                 agg_f['Label'] = agg_f.apply(lambda r: f"{r['Tiempo (Min)']:.0f} min ({r['Porcentaje']:.1f}%)", axis=1)
                 
-                # Creamos el minigráfico horizontal
+                # Creamos el minigráfico horizontal REDUCIDO
                 fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Nivel Evento 3', orientation='h', text='Label')
                 fig_top3.update_traces(marker_color='#d9534f', textposition='outside')
                 fig_top3.update_layout(
-                    height=180, width=800, 
-                    margin=dict(t=10, b=10, l=10, r=100), # Margen derecho para que no se corte la etiqueta
+                    height=130, width=650, # Tamaños reducidos para que sea compacto
+                    margin=dict(t=5, b=5, l=10, r=100), # Margen derecho para etiqueta
                     plot_bgcolor='rgba(0,0,0,0)', 
                     xaxis=dict(visible=False),
-                    yaxis=dict(title='', autorange="reversed", tickfont=dict(size=14, color='black'))
+                    yaxis=dict(title='', autorange="reversed", tickfont=dict(size=13, color='black'))
                 )
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
                     fig_top3.write_image(tmp_chart.name, engine="kaleido")
-                    pdf.image(tmp_chart.name, w=170)
+                    pdf.image(tmp_chart.name, w=130) # Reducido en el PDF
                     os.remove(tmp_chart.name)
             
             # --- Tablas de Detalles Condicionales ---
@@ -642,7 +652,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             if not df_maq_proyectos.empty:
                 check_space(pdf, 25)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.set_text_color(33, 195, 84) # Verde para proyectos
+                pdf.set_text_color(33, 195, 84) # Verde
                 pdf.cell(0, 6, clean_text("> Detalle de paradas por proyecto:"), ln=True)
                 dibujar_tabla_eventos_detallada(df_maq_proyectos, 'Nivel Evento 2', mostrar_categoria=False)
                 
