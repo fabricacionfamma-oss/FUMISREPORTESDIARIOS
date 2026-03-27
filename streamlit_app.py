@@ -329,10 +329,12 @@ def print_pdf_metric_row(pdf, prefix, m):
 def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_date, p_tipo):
     if area.upper() == "ESTAMPADO":
         theme_color = (0, 128, 128) # Teal
+        comp_color = (210, 105, 30) # Naranja cobrizo (Complementario)
         chart_bars = ['#008080', '#66B2B2', '#B2D8D8']
         grupos_area = GRUPOS_ESTAMPADO
     else:
         theme_color = (178, 34, 34) # Crimson
+        comp_color = (40, 100, 150) # Azul acero (Complementario)
         chart_bars = ['#B22222', '#D98880', '#F2D7D5']
         grupos_area = GRUPOS_SOLDADURA
         
@@ -579,11 +581,11 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             hubo_eventos_en_grupo = True
             check_space(pdf, 60)
             
-            # Título de la máquina DESTACADO
+            # Título de la máquina DESTACADO (MODIFICADO CON COMP_COLOR)
             pdf.ln(5)
             pdf.set_font("Arial", 'B', 12)
             pdf.set_text_color(255, 255, 255)
-            pdf.set_fill_color(*theme_color)
+            pdf.set_fill_color(*comp_color)
             pdf.cell(0, 9, clean_text(f"  MÁQUINA: {maq}"), border=0, ln=True, fill=True)
             pdf.ln(2)
             
@@ -616,7 +618,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
 
             pdf.ln(2)
             
-            # --- TOP 3 Fallas (Gráfico de Barras Ajustado) ---
+            # --- TOP 3 Fallas (Gráfico de Barras Ajustado) (MODIFICADO) ---
             if not df_maq_fallas.empty and 'Nivel Evento 3' in df_maq_fallas.columns:
                 check_space(pdf, 60)
                 pdf.set_font("Arial", 'B', 10)
@@ -626,22 +628,25 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 agg_f = df_maq_fallas.groupby('Nivel Evento 3')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
                 total_falla_maq = t_falla if t_falla > 0 else 1
                 
-                # Truncamos la etiqueta para que no sea excesivamente larga
-                agg_f['Nivel Evento 3'] = agg_f['Nivel Evento 3'].apply(lambda x: str(x)[:30] + '...' if len(str(x)) > 30 else str(x))
-                
-                # Preparamos las etiquetas
                 agg_f['Porcentaje'] = (agg_f['Tiempo (Min)'] / total_falla_maq) * 100
-                agg_f['Label'] = agg_f.apply(lambda r: f"{r['Tiempo (Min)']:.0f} min ({r['Porcentaje']:.1f}%)", axis=1)
+                agg_f['Label'] = agg_f.apply(
+                    lambda r: f" {str(r['Nivel Evento 3'])[:45] + '...' if len(str(r['Nivel Evento 3'])) > 45 else str(r['Nivel Evento 3'])} — {r['Tiempo (Min)']:.0f} min ({r['Porcentaje']:.1f}%)", 
+                    axis=1
+                )
                 
-                # CORRECCIÓN DE MARGEN: Se aumentó l=260 para que el texto nunca se corte
                 fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Nivel Evento 3', orientation='h', text='Label')
-                fig_top3.update_traces(marker_color='#d9534f', textposition='outside')
+                fig_top3.update_traces(
+                    marker_color='#d9534f', 
+                    textposition='outside',
+                    textfont=dict(size=13, color='black'),
+                    cliponaxis=False
+                )
                 fig_top3.update_layout(
                     height=140, width=700,
-                    margin=dict(t=5, b=5, l=260, r=80), 
+                    margin=dict(t=5, b=5, l=10, r=400), 
                     plot_bgcolor='rgba(0,0,0,0)', 
                     xaxis=dict(visible=False),
-                    yaxis=dict(title='', autorange="reversed", tickfont=dict(size=12, color='black'))
+                    yaxis=dict(title='', autorange="reversed", showticklabels=False)
                 )
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
