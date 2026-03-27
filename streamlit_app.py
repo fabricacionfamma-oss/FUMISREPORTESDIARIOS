@@ -339,6 +339,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
         grupos_area = GRUPOS_SOLDADURA
         
     hex_theme = '#%02x%02x%02x' % theme_color
+    hex_comp = '#%02x%02x%02x' % comp_color  # Hexadecimal del color complementario para el gráfico
 
     if ini_date is not None and fin_date is not None:
         df_pdf_raw = df_raw[(df_raw['Fecha_Filtro'] >= ini_date) & (df_raw['Fecha_Filtro'] <= fin_date)]
@@ -618,11 +619,11 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
 
             pdf.ln(2)
             
-            # --- TOP 3 Fallas (Gráfico de Barras Ajustado) (MODIFICADO) ---
+            # --- TOP 3 Fallas (Gráfico de Barras Ajustado) ---
             if not df_maq_fallas.empty and 'Nivel Evento 3' in df_maq_fallas.columns:
                 check_space(pdf, 60)
                 pdf.set_font("Arial", 'B', 10)
-                pdf.set_text_color(220, 20, 20)
+                pdf.set_text_color(*comp_color) # <-- MODIFICADO A COLOR COMPLEMENTARIO
                 pdf.cell(0, 6, clean_text("Top 3 Fallas (por tiempo):"), ln=True)
 
                 agg_f = df_maq_fallas.groupby('Nivel Evento 3')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
@@ -636,7 +637,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 
                 fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Nivel Evento 3', orientation='h', text='Label')
                 fig_top3.update_traces(
-                    marker_color='#d9534f', 
+                    marker_color=hex_comp, # <-- MODIFICADO A COLOR COMPLEMENTARIO
                     textposition='outside',
                     textfont=dict(size=13, color='black'),
                     cliponaxis=False
@@ -658,7 +659,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             if not df_maq_fallas.empty:
                 check_space(pdf, 25)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.set_text_color(220, 20, 20)
+                pdf.set_text_color(*comp_color) # <-- MODIFICADO A COLOR COMPLEMENTARIO
                 pdf.cell(0, 6, clean_text("> Detalle de fallas registradas:"), ln=True)
                 dibujar_tabla_eventos_detallada(df_maq_fallas, 'Nivel Evento 3', mostrar_categoria=True)
                 pdf.ln(2)
@@ -666,7 +667,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             if not df_maq_paradas.empty:
                 check_space(pdf, 25)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.set_text_color(200, 150, 0)
+                pdf.set_text_color(*comp_color) # <-- MODIFICADO A COLOR COMPLEMENTARIO
                 pdf.cell(0, 6, clean_text("> Detalle de paradas programadas:"), ln=True)
                 dibujar_tabla_eventos_detallada(df_maq_paradas, 'Nivel Evento 2', mostrar_categoria=False)
                 pdf.ln(2)
@@ -674,7 +675,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
             if not df_maq_proyectos.empty:
                 check_space(pdf, 25)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.set_text_color(33, 195, 84) # Verde
+                pdf.set_text_color(*comp_color) # <-- MODIFICADO A COLOR COMPLEMENTARIO
                 pdf.cell(0, 6, clean_text("> Detalle de paradas por proyecto:"), ln=True)
                 dibujar_tabla_eventos_detallada(df_maq_proyectos, 'Nivel Evento 2', mostrar_categoria=False)
                 
