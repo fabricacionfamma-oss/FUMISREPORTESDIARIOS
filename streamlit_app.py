@@ -264,7 +264,6 @@ class ReportePDF(FPDF):
         self.theme_color = theme_color
 
     def header(self):
-        # AQUÍ SE HA MODIFICADO "logo.png" POR "logo.jpg"
         if os.path.exists("logo.jpg"): self.image("logo.jpg", 10, 8, 30)
         self.set_font("Times", 'B', 16)
         self.set_text_color(*self.theme_color)
@@ -541,10 +540,15 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         print_section_title(pdf, "3. Analisis de Fallas y Paradas", theme_color)
         
         if not df_pdf_g.empty:
-            df_fallas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('FALLA', na=False)]
-            df_paradas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PARADA PROGRAMADA', na=False)]
-            df_proyectos_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PROYECTO', na=False)]
+            
+            # --- MODIFICACIÓN DE LA LÓGICA DE FILTRADO ---
             df_produccion_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN', na=False)]
+            df_proyectos_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PROYECTO', na=False)]
+            df_paradas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PARADA PROGRAMADA', na=False)]
+            
+            # Todo lo que no sea Producción, Proyecto o Parada Programada, se asume como Tiempo Perdido/Falla
+            df_fallas_area = df_pdf_g[~df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN|PROYECTO|PARADA PROGRAMADA', na=False)]
+            # ---------------------------------------------
             
             for maq in sorted(df_pdf_g['Máquina'].unique()):
                 df_maq_fallas = df_fallas_area[df_fallas_area['Máquina'] == maq]
@@ -570,14 +574,14 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.set_font("Arial", 'B', 8)
                 
                 if t_proy > 0:
-                    for col in ["Tiempo de produccion", "Tiempo de falla", "Parada programada", "Tiempo de proyecto"]:
+                    for col in ["Tiempo de produccion", "Tiempos Perdidos", "Parada programada", "Tiempo de proyecto"]:
                         pdf.cell(47 if col!="Parada programada" else 48, 6, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Tiempo de proyecto" else False)
                     setup_table_row(pdf)
                     pdf.set_font("Arial", '', 9)
                     for v in [t_prod, t_falla, t_pp, t_proy]:
                         pdf.cell(47 if v!=t_pp else 48, 7, clean_text(mins_to_duration_str(v)), border=1, align='C', ln=True if v==t_proy else False)
                 else:
-                    for col in ["Tiempo de produccion", "Tiempo de falla", "Parada programada"]:
+                    for col in ["Tiempo de produccion", "Tiempos Perdidos", "Parada programada"]:
                         pdf.cell(63 if col!="Parada programada" else 64, 6, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Parada programada" else False)
                     setup_table_row(pdf)
                     pdf.set_font("Arial", '', 9)
@@ -590,7 +594,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     check_space(pdf, 60)
                     pdf.set_font("Arial", 'B', 10)
                     pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("Top 3 Fallas (por tiempo):"), ln=True)
+                    pdf.cell(0, 6, clean_text("Top 3 Perdidas (por tiempo):"), ln=True)
 
                     agg_f = df_maq_fallas.groupby('Nivel Evento 3')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
                     total_falla_maq = t_falla if t_falla > 0 else 1
@@ -608,7 +612,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 if not df_maq_fallas.empty:
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("> Detalle de fallas registradas:"), ln=True)
+                    pdf.cell(0, 6, clean_text("> Detalle de tiempos perdidos registrados:"), ln=True)
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Nivel Evento 3', mostrar_categoria=True)
                     pdf.ln(2)
                     
