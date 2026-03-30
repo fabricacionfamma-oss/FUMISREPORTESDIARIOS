@@ -97,9 +97,9 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_prod_target = conn.query(q_prod)
         df_op_target = conn.query(q_op)
 
-        # AHORA INCLUIMOS HASTA EL NIVEL 4 PARA QUE NO SE PIERDA NADA
+        # AHORA INCLUIMOS HASTA EL NIVEL 4 Y EL ID DEL EVENTO PARA EVITAR DUPLICADOS
         q_event = f"""
-            SELECT c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
+            SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], 
                    t1.Name as [Nivel Evento 1], 
                    t2.Name as [Nivel Evento 2], 
@@ -127,6 +127,12 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
+
+            # --- NUEVO: CONSOLIDAR EVENTOS DUPLICADOS ---
+            cols_grupo = [c for c in df_raw.columns if c != 'Operador']
+            df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({
+                'Operador': lambda x: ' / '.join(x.unique())
+            }).reset_index()
 
             # --- FUNCIONES DE CLASIFICACIÓN INTELIGENTE ---
             def categorizar_estado(row):
@@ -690,40 +696,73 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
     print_section_title(pdf, "Performance de Operarios General", theme_color)
     
     if not op_target_df.empty:
-        df_filt = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].sort_values('PERFORMANCE', ascending=False)
+        # 1. Filtro primario: por el texto de la columna Fábrica
+        df_filt = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
         
-        check_space(pdf, 30)
-        setup_table_header(pdf, theme_color)
-        pdf.set_font("Arial", 'B', 9)
-        pdf.cell(100, 7, clean_text("Operador"), border=1, fill=True)
-        pdf.cell(60, 7, clean_text("Fabrica"), border=1, fill=True)
-        pdf.cell(30, 7, clean_text("Performance"), border=1, align='C', ln=True, fill=True)
+        # 2. Filtro secundario (Respaldo inteligente): Si la columna Fábrica falla, 
+        # buscamos a los operarios que operaron las máquinas de esta área.
+        if df_filt.empty and not df_pdf.empty:
+            operadores_activos = [op for op in df_pdf['Operador'].unique() if pd.notna(op) and op != '-']
+            ops_individuales = []
+            for op in operadores_activos:
+                # Separamos los nombres por si trabajaron en dupla (ej: "Carlos / Flavio")
+                ops_individuales.extend([o.strip() for o in op.split('/')]) 
+            df_filt = op_target_df[op_target_df['Operador'].isin(ops_individuales)].copy()
+
+        df_filt = df_filt.sort_values('PERFORMANCE', ascending=False)
         
-        setup_table_row(pdf)
-        pdf.set_font("Arial", '', 9)
-        
-        for _, row in df_filt.iterrows():
-            perf_val = int(round(pd.to_numeric(row['PERFORMANCE'], errors='coerce') or 0))
-            pdf.cell(100, 7, " " + clean_text(str(row['Operador'])[:50]), border='B')
-            pdf.cell(60, 7, " " + clean_text(str(row['Fábrica'])[:30]), border='B')
-            
-            if perf_val >= 90: pdf.set_text_color(33, 195, 84)
-            elif perf_val >= 80: pdf.set_text_color(200, 150, 0)
-            else: pdf.set_text_color(220, 20, 20)
-            
+        if not df_filt.empty:
+            check_space(pdf, 30)
+            setup_table_header(pdf, theme_color)
             pdf.set_font("Arial", 'B', 9)
-            pdf.cell(30, 7, clean_text(str(perf_val) + "%"), border='B', align='C', ln=True)
-            pdf.set_text_color(50, 50, 50)
+            pdf.cell(100, 7, clean_text("Operador"), border=1, fill=True)
+            pdf.cell(60, 7, clean_text("Fabrica"), border=1, fill=True)
+            pdf.cell(30, 7, clean_text("Performance"), border=1, align='C', ln=True, fill=True)
+            
+            setup_table_row(pdf)
             pdf.set_font("Arial", '', 9)
-        pdf.ln(5)
+            
+            for _, row in df_filt.iterrows():
+                perf_val = int(round(pd.to_numeric(row['PERFORMANCE'], errors='coerce') or 0))
+                pdf.cell(100, 7, " " + clean_text(str(row['Operador'])[:50]), border='B')
+                
+                # Si la fábrica viene nula o con números extraños, le forzamos el nombre del área para prolijidad visual
+                fab_name = str(row['Fábrica']) if pd.notna(row['Fábrica']) and str(row['Fábrica']).strip() != '' else area
+                pdf.cell(60, 7, " " + clean_text(fab_name[:30]), border='B')
+                
+                if perf_val >= 90: pdf.set_text_color(33, 195, 84)
+                elif perf_val >= 80: pdf.set_text_color(200, 150, 0)
+                else: pdf.set_text_color(220, 20, 20)
+                
+                pdf.set_font("Arial", 'B', 9)
+                pdf.cell(30, 7, clean_text(str(perf_val) + "%"), border='B', align='C', ln=True)
+                pdf.set_text_color(50, 50, 50)
+                pdf.set_font("Arial", '', 9)
+            pdf.ln(5)
+        else:
+            pdf.set_font("Arial", '', 10)
+            pdf.cell(0, 8, clean_text("No se registraron datos de performance para esta area en el periodo."), ln=True)
+    else:
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(0, 8, clean_text("No hay datos de operarios disponibles en el periodo seleccionado."), ln=True)
 
     pdf.set_link(link_tiempos) 
+    
     def agregar_tabla_tiempos(titulo, db_col):
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
         if not op_target_df.empty and db_col in op_target_df.columns:
-            df_temp = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)]
+            df_temp = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
+            
+            # Mismo respaldo para los tiempos de baño y refrigerio
+            if df_temp.empty and not df_pdf.empty:
+                operadores_activos = [op for op in df_pdf['Operador'].unique() if pd.notna(op) and op != '-']
+                ops_individuales = []
+                for op in operadores_activos:
+                    ops_individuales.extend([o.strip() for o in op.split('/')])
+                df_temp = op_target_df[op_target_df['Operador'].isin(ops_individuales)].copy()
+
             df_filtrado = df_temp[df_temp[db_col] > 0].sort_values(db_col, ascending=False)
             
             if not df_filtrado.empty:
