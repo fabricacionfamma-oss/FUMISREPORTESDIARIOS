@@ -76,7 +76,7 @@ with col_btn:
 st.divider()
 
 # ==========================================
-# 2. CARGA DE DATOS DESDE SQL SERVER (wii_bi)
+# 2. CARGA Y LIMPIEZA DE DATOS DESDE SQL SERVER
 # ==========================================
 @st.cache_data(ttl=300)
 def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
@@ -164,11 +164,27 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_raw = conn.query(q_event)
 
         if not df_raw.empty:
-            df_raw['Fecha_Filtro'] = pd.to_datetime(df_raw['Fecha_Filtro'])
+            # MAGIA PANDAS 1: SEPARAR FECHAS Y HORAS
+            df_raw['Fecha_Filtro'] = pd.to_datetime(df_raw['Fecha_Filtro']).dt.date
             df_raw['Inicio_Str'] = pd.to_datetime(df_raw['Inicio']).dt.strftime('%H:%M')
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
+            
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
+
+            # MAGIA PANDAS 2: CONSOLIDAR FALLOS EN UNA COLUMNA
+            # Revisa los niveles 3, 2 y 1, y se queda con el dato más específico que no esté vacío.
+            def consolidar_detalle(row):
+                n3 = str(row.get('Nivel Evento 3', '')).strip()
+                n2 = str(row.get('Nivel Evento 2', '')).strip()
+                n1 = str(row.get('Nivel Evento 1', '')).strip()
+                
+                if n3 and n3.lower() not in ['none', 'nan']: return n3
+                if n2 and n2.lower() not in ['none', 'nan']: return n2
+                if n1 and n1.lower() not in ['none', 'nan']: return n1
+                return 'Detalle no especificado'
+
+            df_raw['Detalle_Unificado'] = df_raw.apply(consolidar_detalle, axis=1)
 
         return df_raw, df_oee_target, df_prod_target, df_op_target
 
@@ -205,12 +221,8 @@ with col_p2:
         pdf_ini = dt_ref - timedelta(days=dt_ref.weekday()) # Lunes
         pdf_fin = pdf_ini + timedelta(days=6) # Domingo
         
-        # Calcular el número de semana
         semana_num = pdf_ini.isocalendar().week
-        
-        # Etiqueta visual para la UI y PDF
         pdf_label = f"Semana {semana_num} ({pdf_ini.strftime('%d/%m/%Y')} al {pdf_fin.strftime('%d/%m/%Y')})"
-        # Etiqueta segura para el nombre del archivo (sin barras)
         file_label = f"Semana_{semana_num}_{pdf_ini.strftime('%d-%m-%Y')}_al_{pdf_fin.strftime('%d-%m-%Y')}"
         st.info(f"Rango calculado: {pdf_label}")
         
@@ -226,11 +238,9 @@ with col_p2:
         last_day = calendar.monthrange(pdf_anio, pdf_mes)[1]
         pdf_fin = pd.to_datetime(f"{pdf_anio}-{pdf_mes}-{last_day}")
         
-        # Etiqueta visual y para archivo
         pdf_label = f"{mes_sel} {pdf_anio}"
         file_label = f"{mes_sel}_{pdf_anio}"
 
-# Descarga de datos basados en UI
 df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
     pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio
 )
@@ -423,7 +433,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             detalle_str = str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else "-"
             
             if mostrar_categoria:
-                categoria_str = " " + str(row.get('Nivel Evento 2', '-'))[:15]
+                # Usamos el Nivel 1 para la columna corta de Categoría ("GESTION", "PARADA PROGRAMADA")
+                categoria_str = " " + str(row.get('Nivel Evento 1', '-'))[:15] 
                 pdf.cell(w_f, 6, val_fecha, border='B', align='C')
                 pdf.cell(w_i, 6, val_inicio, border='B', align='C')
                 pdf.cell(w_f2, 6, val_fin, border='B', align='C')
@@ -541,14 +552,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         
         if not df_pdf_g.empty:
             
-            # --- MODIFICACIÓN DE LA LÓGICA DE FILTRADO ---
+            # Buscamos en el Nivel Evento 1 para la categoría general
             df_produccion_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN', na=False)]
             df_proyectos_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PROYECTO', na=False)]
             df_paradas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PARADA PROGRAMADA', na=False)]
             
-            # Todo lo que no sea Producción, Proyecto o Parada Programada, se asume como Tiempo Perdido/Falla
+            # Todo lo que no sea Producción, Proyecto o Parada Programada es "Falla" o Tiempo Perdido
             df_fallas_area = df_pdf_g[~df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN|PROYECTO|PARADA PROGRAMADA', na=False)]
-            # ---------------------------------------------
             
             for maq in sorted(df_pdf_g['Máquina'].unique()):
                 df_maq_fallas = df_fallas_area[df_fallas_area['Máquina'] == maq]
@@ -590,17 +600,17 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
 
                 pdf.ln(2)
                 
-                if not df_maq_fallas.empty and 'Nivel Evento 3' in df_maq_fallas.columns:
+                if not df_maq_fallas.empty and 'Detalle_Unificado' in df_maq_fallas.columns:
                     check_space(pdf, 60)
                     pdf.set_font("Arial", 'B', 10)
                     pdf.set_text_color(*comp_color)
                     pdf.cell(0, 6, clean_text("Top 3 Perdidas (por tiempo):"), ln=True)
 
-                    agg_f = df_maq_fallas.groupby('Nivel Evento 3')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
+                    agg_f = df_maq_fallas.groupby('Detalle_Unificado')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
                     total_falla_maq = t_falla if t_falla > 0 else 1
-                    agg_f['Label'] = agg_f.apply(lambda r: f" {str(r['Nivel Evento 3'])[:45]} — {r['Tiempo (Min)']:.0f} min ({(r['Tiempo (Min)']/total_falla_maq)*100:.1f}%)", axis=1)
+                    agg_f['Label'] = agg_f.apply(lambda r: f" {str(r['Detalle_Unificado'])[:45]} — {r['Tiempo (Min)']:.0f} min ({(r['Tiempo (Min)']/total_falla_maq)*100:.1f}%)", axis=1)
                     
-                    fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Nivel Evento 3', orientation='h', text='Label')
+                    fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Detalle_Unificado', orientation='h', text='Label')
                     fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'), cliponaxis=False)
                     fig_top3.update_layout(height=140, width=700, margin=dict(t=5, b=5, l=10, r=400), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False), yaxis=dict(title='', autorange="reversed", showticklabels=False))
                     
@@ -613,7 +623,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_text_color(*comp_color)
                     pdf.cell(0, 6, clean_text("> Detalle de tiempos perdidos registrados:"), ln=True)
-                    dibujar_tabla_eventos_detallada(df_maq_fallas, 'Nivel Evento 3', mostrar_categoria=True)
+                    # Usamos la columna Detalle_Unificado que creamos mágicamente arriba
+                    dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Unificado', mostrar_categoria=True)
                     pdf.ln(2)
                     
         if not df_pdf_g.empty:
