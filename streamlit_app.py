@@ -93,6 +93,11 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code"
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY op.Name, p.Factory"
 
+        # --- EJECUCIÓN DE LAS CONSULTAS DE MÉTRICAS ---
+        df_oee_target = conn.query(q_oee)
+        df_prod_target = conn.query(q_prod)
+        df_op_target = conn.query(q_op)
+
         # AHORA INCLUIMOS HASTA EL NIVEL 4 Y EL ID DEL EVENTO PARA EVITAR DUPLICADOS
         q_event = f"""
             SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
@@ -124,7 +129,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
-            # --- NUEVO: CONSOLIDAR EVENTOS DUPLICADOS ---
+            # --- CONSOLIDAR EVENTOS DUPLICADOS POR OPERADORES ---
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({
                 'Operador': lambda x: ' / '.join(x.unique())
@@ -270,7 +275,7 @@ def clean_text(text):
     return str(text).replace('•', '-').replace('➤', '>').encode('latin-1', 'replace').decode('latin-1')
 
 def check_space(pdf, required_height):
-    if pdf.get_y() + required_height > (pdf.h - 15): pdf.add_page()
+    if pdf.get_y() + required_height > 270: pdf.add_page()
 
 def print_section_title(pdf, title, theme_color):
     pdf.ln(3)
