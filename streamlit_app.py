@@ -1,10 +1,3 @@
-¡Perfecto! Al igual que hicimos en la versión anterior, voy a integrar la lógica para que cuando selecciones el reporte Semanal, el punto "2. Horarios y Tiempo de Apertura" muestre la grilla exacta de lunes a viernes desglosada por Turno (A, B, C, etc.).
-
-Esta vez, he adaptado la lógica para que funcione perfectamente con tu nueva estructura que recorre los datos por Grupos Fumiscor (Prensas Progresivas, Balancines, etc.) de manera dinámica en distintas páginas.
-
-Aquí tienes el código completo con la funcionalidad aplicada:
-
-Python
 import streamlit as st
 import pandas as pd
 import plotly.express as px
