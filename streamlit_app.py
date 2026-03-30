@@ -530,7 +530,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.cell(38, 7, "Produccion", border=1, align='C', fill=True)
                 pdf.cell(38, 7, "Fallas/Gestion", border=1, align='C', fill=True)
                 pdf.cell(38, 7, "Paradas Prog.", border=1, align='C', fill=True)
-                pdf.cell(38, 7, "Proyectos", border=1, align='C', fill=True)
+                pdf.cell(38, 7, "Proyecto", border=1, align='C', fill=True)
                 pdf.cell(38, 7, "Descansos", border=1, align='C', ln=True, fill=True)
                 
                 setup_table_row(pdf)
@@ -565,8 +565,18 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text(">> Detalle de Tiempos Perdidos Registrados:"), ln=True)
+                    pdf.cell(0, 6, clean_text(">> Detalle de Tiempos Perdidos (Fallas y Gestión):"), ln=True)
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final')
+                    pdf.ln(4)
+
+                # --- DETALLE PARADAS PROGRAMADAS (NUEVO BLOQUE) ---
+                df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
+                if not df_maq_paradas.empty:
+                    check_space(pdf, 40)
+                    pdf.set_font("Arial", 'B', 9)
+                    pdf.set_text_color(*theme_color) 
+                    pdf.cell(0, 6, clean_text(">> Detalle de Paradas Programadas:"), ln=True)
+                    dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final')
                     pdf.ln(4)
 
                 # --- APARTADO EXCLUSIVO DE PROYECTOS ---
@@ -598,12 +608,27 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.image(tmp1.name, x=col1_x, y=y_base, w=90)
                 os.remove(tmp1.name)
 
-            # --- TORTA 2: ESPECÍFICO FALLAS / GESTIÓN ---
-            df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión']
+            # --- TORTA 2: ESPECÍFICO FALLAS / GESTIÓN (DINÁMICO POR ÁREA/MACRO) ---
+            df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión'].copy()
             if not df_fallas_grupo.empty:
-                resumen_fallas = df_fallas_grupo.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index()
-                fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Detalle_Final', hole=0.4, 
-                               title="Detalle de Fallas por Área (Hs)", color_discrete_sequence=px.colors.qualitative.Set1)
+                
+                # Función inteligente para separar Gestión de Mantenimiento/Calidad/Fallas
+                def clasificar_macro(row):
+                    n1 = str(row.get('Nivel Evento 1', '')).strip().upper()
+                    n2 = str(row.get('Nivel Evento 2', '')).strip().upper()
+                    
+                    if 'GESTION' in n1 or 'GESTIÓN' in n1:
+                        return 'Gestión'
+                    if 'FALLA' in n1:
+                        return n2.title() if n2 not in ['NAN', 'NONE', ''] else 'Falla (Sin área)'
+                    return n1.title() if n1 not in ['NAN', 'NONE', ''] else 'Sin Clasificar'
+
+                df_fallas_grupo['Categoria_Macro'] = df_fallas_grupo.apply(clasificar_macro, axis=1)
+                resumen_fallas = df_fallas_grupo.groupby('Categoria_Macro')['Tiempo (Min)'].sum().reset_index()
+                
+                fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Categoria_Macro', hole=0.4, 
+                               title="Fallas y Gestión por Área (Hs)", color_discrete_sequence=px.colors.qualitative.Set1)
+                
                 fig_p.update_layout(width=350, height=270, margin=dict(t=30, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=-0.1))
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp2:
@@ -614,7 +639,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.set_xy(col2_x + 10, y_base + 30)
                 pdf.set_font("Arial", 'I', 9)
                 pdf.set_text_color(100)
-                pdf.cell(0, 10, clean_text("Sin Fallas registradas."))
+                pdf.cell(0, 10, clean_text("Sin Fallas o Gestión registradas."))
 
             pdf.set_y(y_base + 75)
             pdf.ln(5)
