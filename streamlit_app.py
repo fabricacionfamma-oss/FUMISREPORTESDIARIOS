@@ -264,7 +264,8 @@ class ReportePDF(FPDF):
         self.theme_color = theme_color
 
     def header(self):
-        if os.path.exists("logo.png"): self.image("logo.png", 10, 8, 30)
+        # AQUÍ SE HA MODIFICADO "logo.png" POR "logo.jpg"
+        if os.path.exists("logo.jpg"): self.image("logo.jpg", 10, 8, 30)
         self.set_font("Times", 'B', 16)
         self.set_text_color(*self.theme_color)
         self.cell(0, 10, clean_text(f"REPORTE GERENCIAL - {self.area.upper()}"), ln=True, align='R')
