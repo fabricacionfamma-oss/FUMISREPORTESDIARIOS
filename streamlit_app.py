@@ -93,12 +93,10 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code"
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY op.Name, p.Factory"
 
-        # --- EJECUCIÓN DE LAS CONSULTAS DE MÉTRICAS ---
         df_oee_target = conn.query(q_oee)
         df_prod_target = conn.query(q_prod)
         df_op_target = conn.query(q_op)
 
-        # AHORA INCLUIMOS HASTA EL NIVEL 4 Y EL ID DEL EVENTO PARA EVITAR DUPLICADOS
         q_event = f"""
             SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], 
@@ -129,13 +127,11 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
-            # --- CONSOLIDAR EVENTOS DUPLICADOS POR OPERADORES ---
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({
                 'Operador': lambda x: ' / '.join(x.unique())
             }).reset_index()
 
-            # --- FUNCIONES DE CLASIFICACIÓN INTELIGENTE ---
             def categorizar_estado(row):
                 texto_completo = f"{row.get('Nivel Evento 1','')} {row.get('Nivel Evento 2','')} {row.get('Nivel Evento 3','')} {row.get('Nivel Evento 4','')} ".upper()
                 if 'PRODUCCION' in texto_completo or 'PRODUCCIÓN' in texto_completo: return 'Producción'
@@ -222,7 +218,6 @@ with col_p2:
         pdf_label = f"{mes_sel} {pdf_anio}"
         file_label = f"{mes_sel}_{pdf_anio}"
 
-# --- SE GUARDAN LOS DATOS EXTRAÍDOS EN VARIABLES GLOBALES ---
 df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
     pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio
 )
@@ -275,8 +270,13 @@ def clean_text(text):
     if pd.isna(text): return "-"
     return str(text).replace('•', '-').replace('➤', '>').encode('latin-1', 'replace').decode('latin-1')
 
+# --- MEJORA 1: FUNCIÓN DE ESPACIO OPTIMIZADA ---
+# Evita saltos de página dobles asegurándose de que no estemos ya al principio de una hoja.
 def check_space(pdf, required_height):
-    if pdf.get_y() + required_height > 270: pdf.add_page()
+    if pdf.get_y() + required_height > 270 and pdf.get_y() > 40:
+        pdf.add_page()
+        return True
+    return False
 
 def print_section_title(pdf, title, theme_color):
     pdf.ln(3)
@@ -396,7 +396,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
 
-    # FUNCIÓN INTELIGENTE PARA DIBUJAR TABLAS CON SALTO DE PÁGINA (Evita filas huérfanas)
+    # FUNCIÓN INTELIGENTE PARA DIBUJAR TABLAS CON SALTO DE PÁGINA SEGURO
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
         if not df_subset.empty:
             check_space(pdf, 30) # Espacio base inicial
@@ -421,8 +421,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             df_subset = df_subset.sort_values(['Fecha_Filtro', '_sort_time'], ascending=[True, True])
             
             for _, row in df_subset.iterrows():
-                # Si llegamos cerca del margen inferior, agregamos página y repetimos cabeceras
-                if pdf.get_y() > 265:
+                # --- MEJORA 2: UMBLAR MÁS ALTO (260) PARA EVITAR QUE FPDF CORTE LA TABLA ---
+                if pdf.get_y() > 260:
                     pdf.add_page()
                     dibujar_cabeceras()
                     setup_table_row(pdf)
@@ -528,11 +528,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     pdf.cell(44, 7, clean_text(mins_to_duration_str(r['NoReg'])), border=1, align='C', ln=True)
                 pdf.ln(5)
 
-        check_space(pdf, 40)
+        # --- MEJORA 3: LÓGICA DE TÍTULO Y MÁQUINAS PARA EVITAR ORMANDAD ---
+        check_space(pdf, 120) # Reservamos espacio suficiente para el Título Y la primera máquina juntas
         print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
         
         if not df_pdf_g.empty:
-            for idx, maq in enumerate(sorted(df_pdf_g['Máquina'].unique())):
+            impresas = 0
+            for maq in sorted(df_pdf_g['Máquina'].unique()):
                 df_maq = df_pdf_g[df_pdf_g['Máquina'] == maq]
                 
                 t_prod = df_maq[df_maq['Estado_Global'] == 'Producción']['Tiempo (Min)'].sum()
@@ -543,17 +545,20 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 
                 if sum([t_prod, t_falla, t_parada, t_proy, t_desc]) == 0: continue
                     
-                check_space(pdf, 110)
-                if idx > 0:
-                    pdf.ln(8)
-                    x_actual, y_actual = pdf.get_x(), pdf.get_y()
-                    pdf.set_draw_color(200, 200, 200)
-                    pdf.set_line_width(0.8)
-                    pdf.line(x_actual, y_actual, x_actual + 190, y_actual)
-                    pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2)
-                    pdf.ln(6)
-                else:
-                    pdf.ln(5)
+                if impresas > 0:
+                    salto_ejecutado = check_space(pdf, 110)
+                    if not salto_ejecutado:
+                        pdf.ln(6)
+                        x_actual, y_actual = pdf.get_x(), pdf.get_y()
+                        pdf.set_draw_color(200, 200, 200)
+                        pdf.set_line_width(0.8)
+                        pdf.line(x_actual, y_actual, x_actual + 190, y_actual)
+                        pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2)
+                        pdf.ln(6)
+                    else:
+                        pdf.ln(2) # Pequeño margen si venimos de un salto forzado
+
+                impresas += 1
 
                 pdf.set_font("Arial", 'B', 12)
                 pdf.set_text_color(255, 255, 255)
@@ -640,7 +645,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         # Produccion Grupo
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g] if not df_prod_pdf.empty else pd.DataFrame()
         if not df_prod_pdf_g.empty:
-            check_space(pdf, 80)
+            check_space(pdf, 110)
             print_section_title(pdf, "5. Produccion por Maquina", theme_color)
             prod_maq = df_prod_pdf_g.groupby('Máquina')[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index()
             fig_prod = px.bar(prod_maq, x='Máquina', y=['Buenas', 'Retrabajo', 'Observadas'], barmode='stack', color_discrete_sequence=chart_bars, text_auto=True)
@@ -665,7 +670,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             
             df_prod_group = df_prod_pdf_g.groupby(['Máquina', 'Código'])[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index().sort_values('Máquina')
             for _, row in df_prod_group.iterrows():
-                if pdf.get_y() > 265:
+                if pdf.get_y() > 260:
                     pdf.add_page(); draw_prod_header(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 
                 pdf.cell(40, 7, " " + clean_text(str(row['Máquina'])[:25]), 'B')
@@ -706,7 +711,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             setup_table_row(pdf); pdf.set_font("Arial", '', 9)
             
             for _, row in df_filt.iterrows():
-                if pdf.get_y() > 265:
+                if pdf.get_y() > 260:
                     pdf.add_page(); draw_perf_header(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
 
                 perf_val = int(round(pd.to_numeric(row['PERFORMANCE'], errors='coerce') or 0))
@@ -782,7 +787,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 
                 for _, r in df_res.iterrows():
-                    if pdf.get_y() > 265:
+                    if pdf.get_y() > 260:
                         pdf.add_page(); draw_desc_header(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
 
                     pdf.cell(80, 7, " " + clean_text(r['Operador'])[:35], 'B')
