@@ -222,6 +222,7 @@ with col_p2:
         pdf_label = f"{mes_sel} {pdf_anio}"
         file_label = f"{mes_sel}_{pdf_anio}"
 
+# --- SE GUARDAN LOS DATOS EXTRAÍDOS EN VARIABLES GLOBALES ---
 df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
     pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio
 )
@@ -808,7 +809,7 @@ with col_p3:
         if st.button("Preparar Reporte ESTAMPADO", use_container_width=True):
             with st.spinner("Conectando con wii_bi y construyendo PDF..."):
                 try:
-                    pdf_data = crear_pdf("Estampado", pdf_label, df_oee_target, df_op_target, df_prod_target, df_raw, pdf_tipo)
+                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
                     st.download_button("Descargar PDF Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -817,7 +818,7 @@ with col_p3:
         if st.button("Preparar Reporte SOLDADURA", use_container_width=True):
             with st.spinner("Conectando con wii_bi y construyendo PDF..."):
                 try:
-                    pdf_data = crear_pdf("Soldadura", pdf_label, df_oee_target, df_op_target, df_prod_target, df_raw, pdf_tipo)
+                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
                     st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
