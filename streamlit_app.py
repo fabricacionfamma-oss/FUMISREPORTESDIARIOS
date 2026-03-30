@@ -129,7 +129,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
             # --- NUEVO: CONSOLIDAR EVENTOS DUPLICADOS ---
-            # Agrupamos por el ID único del evento para unificar operadores en una sola fila
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({
                 'Operador': lambda x: ' / '.join(x.unique())
@@ -767,7 +766,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             df_filtrado = df_temp[df_temp[db_col] > 0].sort_values(db_col, ascending=False)
             
             if not df_filtrado.empty:
-                # --- NUEVO: Conteo de eventos desde los registros detallados ---
+                # --- Conteo de eventos desde los registros detallados ---
                 conteo_eventos = {}
                 if not df_pdf.empty:
                     # Buscamos en el árbol de eventos si pertenece a Baño o Refrigerio
@@ -776,7 +775,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     )
                     df_ev = df_pdf[mask]
                     for _, r in df_ev.iterrows():
-                        # Si hay varios operarios separados por "/", les sumamos 1 evento a cada uno
                         ops = str(r['Operador']).split('/')
                         for op in ops:
                             op = op.strip()
@@ -795,26 +793,27 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 for _, r in df_filtrado.iterrows():
                     op_name = clean_text(r['Operador'])
                     
-                    # Buscamos cuántos eventos tuvo ese operador en particular
                     cant = 0
                     for key_op, count in conteo_eventos.items():
                         if key_op.upper() in op_name.upper() or op_name.upper() in key_op.upper():
                             cant = count
                             break
                             
-                    # Lógica de respaldo: Si el sistema acumuló tiempo pero no hay un registro del evento, 
-                    # asumimos que salió al menos 1 vez para que tenga sentido matemático.
                     if cant == 0 and r[db_col] > 0:
                         cant = 1
                         
-                    pdf.cell(80, 7, " " + op_name, border=1)
+                    pdf.cell(80, 7, " " + op_name[:35], border=1)
                     pdf.cell(55, 7, f"{r[db_col]:.1f}", border=1, align='C')
                     pdf.cell(55, 7, str(cant), border=1, align='C', ln=True)
                 pdf.ln(5)
             else:
                 pdf.set_font("Arial", '', 10)
                 pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
+        else:
+            pdf.set_font("Arial", '', 10)
+            pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
 
+    # Dibuja la tabla de Baño y luego, abajo, dibuja la de Refrigerio
     agregar_tabla_tiempos("Tiempo de Bano Acumulado (Min)", "BathTime", ["BAÑO", "BANO"])
     agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado (Min)", "BreakTime", ["REFRIGERIO"])
 
