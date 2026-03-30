@@ -85,67 +85,19 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         ini_str = fecha_ini.strftime('%Y-%m-%d')
         fin_str = fecha_fin.strftime('%Y-%m-%d')
 
-        # --- 1. DATOS DE OEE POR MÁQUINA ---
         if tipo_periodo == "Mensual":
-            q_oee = f"""
-                SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, 
-                       p.Performance as PERFORMANCE, p.Quality as CALIDAD
-                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId
-                WHERE p.Month = {mes} AND p.Year = {anio}
-            """
+            q_oee = f"SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, p.Performance as PERFORMANCE, p.Quality as CALIDAD FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Month = {mes} AND p.Year = {anio}"
+            q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code"
+            q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY op.Name, p.Factory"
         else:
-            q_oee = f"""
-                SELECT c.Name as Máquina, AVG(p.Oee) as OEE, AVG(p.Availability) as DISPONIBILIDAD, 
-                       AVG(p.Performance) as PERFORMANCE, AVG(p.Quality) as CALIDAD
-                FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
-                GROUP BY c.Name
-            """
+            q_oee = f"SELECT c.Name as Máquina, AVG(p.Oee) as OEE, AVG(p.Availability) as DISPONIBILIDAD, AVG(p.Performance) as PERFORMANCE, AVG(p.Quality) as CALIDAD FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name"
+            q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code"
+            q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY op.Name, p.Factory"
+
         df_oee_target = conn.query(q_oee)
-
-        # --- 2. DATOS DE PRODUCCIÓN ---
-        if tipo_periodo == "Mensual":
-            q_prod = f"""
-                SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, 
-                       SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
-                FROM PROD_M_01 p 
-                JOIN CELL c ON p.CellId = c.CellId
-                JOIN PRODUCT pr ON p.ProductId = pr.ProductId
-                WHERE p.Month = {mes} AND p.Year = {anio}
-                GROUP BY c.Name, pr.Code
-            """
-        else:
-            q_prod = f"""
-                SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, 
-                       SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
-                FROM PROD_D_01 p 
-                JOIN CELL c ON p.CellId = c.CellId
-                JOIN PRODUCT pr ON p.ProductId = pr.ProductId
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
-                GROUP BY c.Name, pr.Code
-            """
         df_prod_target = conn.query(q_prod)
-
-        # --- 3. DATOS DE OPERADORES ---
-        if tipo_periodo == "Mensual":
-            q_op = f"""
-                SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE,
-                       SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime
-                FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId
-                WHERE p.Month = {mes} AND p.Year = {anio}
-                GROUP BY op.Name, p.Factory
-            """
-        else:
-            q_op = f"""
-                SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE,
-                       SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime
-                FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
-                GROUP BY op.Name, p.Factory
-            """
         df_op_target = conn.query(q_op)
 
-        # --- 4. DETALLE DE EVENTOS (RAW) ---
         q_event = f"""
             SELECT c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], t.Area as [Nivel Evento 1], 
@@ -164,24 +116,21 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_raw = conn.query(q_event)
 
         if not df_raw.empty:
-            # MAGIA PANDAS 1: SEPARAR FECHAS Y HORAS
             df_raw['Fecha_Filtro'] = pd.to_datetime(df_raw['Fecha_Filtro']).dt.date
             df_raw['Inicio_Str'] = pd.to_datetime(df_raw['Inicio']).dt.strftime('%H:%M')
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
-            
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
-            # MAGIA PANDAS 2: CONSOLIDAR FALLOS EN UNA COLUMNA
-            # Revisa los niveles 3, 2 y 1, y se queda con el dato más específico que no esté vacío.
+            # Consolidamos el detalle ignorando los None
             def consolidar_detalle(row):
                 n3 = str(row.get('Nivel Evento 3', '')).strip()
                 n2 = str(row.get('Nivel Evento 2', '')).strip()
                 n1 = str(row.get('Nivel Evento 1', '')).strip()
                 
-                if n3 and n3.lower() not in ['none', 'nan']: return n3
-                if n2 and n2.lower() not in ['none', 'nan']: return n2
-                if n1 and n1.lower() not in ['none', 'nan']: return n1
+                if n3 and n3.lower() not in ['none', 'nan', 'null']: return n3
+                if n2 and n2.lower() not in ['none', 'nan', 'null']: return n2
+                if n1 and n1.lower() not in ['none', 'nan', 'null']: return n1
                 return 'Detalle no especificado'
 
             df_raw['Detalle_Unificado'] = df_raw.apply(consolidar_detalle, axis=1)
@@ -189,7 +138,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         return df_raw, df_oee_target, df_prod_target, df_op_target
 
     except Exception as e:
-        st.error(f"Error ejecutando consulta a base de datos wii_bi: {e}")
+        st.error(f"Error ejecutando consulta: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # ==========================================
@@ -224,7 +173,6 @@ with col_p2:
         semana_num = pdf_ini.isocalendar().week
         pdf_label = f"Semana {semana_num} ({pdf_ini.strftime('%d/%m/%Y')} al {pdf_fin.strftime('%d/%m/%Y')})"
         file_label = f"Semana_{semana_num}_{pdf_ini.strftime('%d-%m-%Y')}_al_{pdf_fin.strftime('%d-%m-%Y')}"
-        st.info(f"Rango calculado: {pdf_label}")
         
     elif pdf_tipo == "Mensual":
         c_m, c_y = st.columns(2)
@@ -433,8 +381,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             detalle_str = str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else "-"
             
             if mostrar_categoria:
-                # Usamos el Nivel 1 para la columna corta de Categoría ("GESTION", "PARADA PROGRAMADA")
-                categoria_str = " " + str(row.get('Nivel Evento 1', '-'))[:15] 
+                # Buscamos algo limpio que no sea None para la columna Categoría
+                cat_str = str(row.get('Nivel Evento 1', '')).replace('None', '').replace('nan', '').strip()
+                if not cat_str:
+                    cat_str = str(row.get('Nivel Evento 3', '')).replace('None', '').replace('nan', '').strip()
+                categoria_str = " " + cat_str[:15]
+
                 pdf.cell(w_f, 6, val_fecha, border='B', align='C')
                 pdf.cell(w_i, 6, val_inicio, border='B', align='C')
                 pdf.cell(w_f2, 6, val_fin, border='B', align='C')
@@ -552,13 +504,18 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         
         if not df_pdf_g.empty:
             
-            # Buscamos en el Nivel Evento 1 para la categoría general
-            df_produccion_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN', na=False)]
-            df_proyectos_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PROYECTO', na=False)]
-            df_paradas_area = df_pdf_g[df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PARADA PROGRAMADA', na=False)]
+            # --- FILTRO GLOBAL INTELIGENTE ---
+            # Une los 3 niveles en un solo texto gigante y busca ahí adentro. 
+            # Así, si "PRODUCCION" se escondió en el Nivel 3 o en el 2, lo encuentra sí o sí.
+            df_pdf_g['Filtro_Global'] = df_pdf_g['Nivel Evento 1'].astype(str) + " " + df_pdf_g['Nivel Evento 2'].astype(str) + " " + df_pdf_g['Nivel Evento 3'].astype(str)
+            df_pdf_g['Filtro_Global'] = df_pdf_g['Filtro_Global'].str.upper()
+
+            df_produccion_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PRODUCCION|PRODUCCIÓN', na=False)]
+            df_proyectos_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PROYECTO', na=False)]
+            df_paradas_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PARADA PROGRAMADA', na=False)]
             
-            # Todo lo que no sea Producción, Proyecto o Parada Programada es "Falla" o Tiempo Perdido
-            df_fallas_area = df_pdf_g[~df_pdf_g['Nivel Evento 1'].astype(str).str.upper().str.contains('PRODUCCION|PRODUCCIÓN|PROYECTO|PARADA PROGRAMADA', na=False)]
+            # Todo lo que NO está en las 3 de arriba, es Tiempo Perdido puro y duro.
+            df_fallas_area = df_pdf_g[~df_pdf_g['Filtro_Global'].str.contains('PRODUCCION|PRODUCCIÓN|PROYECTO|PARADA PROGRAMADA', na=False)]
             
             for maq in sorted(df_pdf_g['Máquina'].unique()):
                 df_maq_fallas = df_fallas_area[df_fallas_area['Máquina'] == maq]
@@ -623,7 +580,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_text_color(*comp_color)
                     pdf.cell(0, 6, clean_text("> Detalle de tiempos perdidos registrados:"), ln=True)
-                    # Usamos la columna Detalle_Unificado que creamos mágicamente arriba
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Unificado', mostrar_categoria=True)
                     pdf.ln(2)
                     
@@ -631,10 +587,19 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             check_space(pdf, 75)
             print_section_title(pdf, "4. Resumen General de Tiempos del Grupo", theme_color)
             
-            df_pdf_g['Nivel Evento 1'] = df_pdf_g['Nivel Evento 1'].replace('', 'S/D').fillna('S/D')
-            resumen_tiempos = df_pdf_g.groupby('Nivel Evento 1')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False)
+            # --- ARREGLO PARA EL GRÁFICO DE TORTA ---
+            # Busca automáticamente el texto válido para que no diga "S/D" o "None"
+            def obtener_categoria_real(row):
+                for col in ['Nivel Evento 3', 'Nivel Evento 2', 'Nivel Evento 1']:
+                    val = str(row.get(col, '')).strip()
+                    if val.upper() not in ['NONE', 'NAN', 'S/D', '', 'NULL']:
+                        return val.title()
+                return 'Sin Clasificar'
+                
+            df_pdf_g['Categoria_Torta'] = df_pdf_g.apply(obtener_categoria_real, axis=1)
+            resumen_tiempos = df_pdf_g.groupby('Categoria_Torta')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False)
             
-            fig_pie = px.pie(resumen_tiempos, values='Tiempo (Min)', names='Nivel Evento 1', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_pie = px.pie(resumen_tiempos, values='Tiempo (Min)', names='Categoria_Torta', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_pie.update_layout(width=420, height=270, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=-0.1))
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile2:
@@ -649,7 +614,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 
                 for _, row in resumen_tiempos.iterrows():
                     if row['Tiempo (Min)'] <= 0: continue
-                    lbl_print = row['Nivel Evento 1'] + " (no afecta disp.)" if 'PROYECTO' in row['Nivel Evento 1'].upper() else row['Nivel Evento 1']
+                    lbl_print = row['Categoria_Torta'] + " (no afecta disp.)" if 'PROYECTO' in row['Categoria_Torta'].upper() else row['Categoria_Torta']
                     pdf.set_x(125)
                     pdf.set_font("Arial", 'B', 8)
                     pdf.set_text_color(50, 50, 50)
