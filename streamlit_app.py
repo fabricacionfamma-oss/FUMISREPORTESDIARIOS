@@ -129,31 +129,39 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
             # --- FUNCIONES DE CLASIFICACIÓN INTELIGENTE ---
-            def obtener_ultimo_nivel(row):
-                niveles = [str(row.get(col, '')).strip() for col in ['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']]
-                validos = [n for n in niveles if n.lower() not in ['none', 'nan', '', 'null']]
-                
-                if not validos: return "Sin detalle en sistema"
-                
-                unicos = []
-                for v in validos:
-                    if v.upper() not in [u.upper() for u in unicos]:
-                        unicos.append(v)
-                
-                return unicos[-1]
-
             def categorizar_estado(row):
                 texto_completo = f"{row.get('Nivel Evento 1','')} {row.get('Nivel Evento 2','')} {row.get('Nivel Evento 3','')} {row.get('Nivel Evento 4','')} ".upper()
-                
                 if 'PRODUCCION' in texto_completo or 'PRODUCCIÓN' in texto_completo: return 'Producción'
                 if 'PROYECTO' in texto_completo: return 'Proyecto'
                 if 'BAÑO' in texto_completo or 'BANO' in texto_completo or 'REFRIGERIO' in texto_completo: return 'Descanso'
                 if 'PARADA PROGRAMADA' in texto_completo: return 'Parada Programada'
-                
                 return 'Falla/Gestión'
 
-            df_raw['Detalle_Final'] = df_raw.apply(obtener_ultimo_nivel, axis=1)
+            def clasificar_macro(row):
+                n1 = str(row.get('Nivel Evento 1', '')).strip().upper()
+                n2 = str(row.get('Nivel Evento 2', '')).strip().upper()
+                if 'GESTION' in n1 or 'GESTIÓN' in n1: return 'Gestión'
+                if 'FALLA' in n1: return n2.title() if n2 not in ['NAN', 'NONE', ''] else 'Falla (Sin área)'
+                return n1.title() if n1 not in ['NAN', 'NONE', ''] else 'Sin Clasificar'
+
             df_raw['Estado_Global'] = df_raw.apply(categorizar_estado, axis=1)
+            df_raw['Categoria_Macro'] = df_raw.apply(clasificar_macro, axis=1)
+
+            def obtener_ultimo_nivel(row):
+                niveles = [str(row.get(col, '')).strip() for col in ['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']]
+                validos = [n for n in niveles if n.lower() not in ['none', 'nan', '', 'null']]
+                if not validos: return "Sin detalle en sistema"
+                
+                ultimo = validos[-1]
+                macro = row['Categoria_Macro']
+                
+                # Si es Falla/Gestión, agregamos el tag del área visible para dar contexto
+                if row['Estado_Global'] == 'Falla/Gestión':
+                    if macro.upper() not in ultimo.upper():
+                        return f"[{macro}] {ultimo}"
+                return ultimo
+
+            df_raw['Detalle_Final'] = df_raw.apply(obtener_ultimo_nivel, axis=1)
 
         return df_raw, df_oee_target, df_prod_target, df_op_target
 
@@ -569,7 +577,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final')
                     pdf.ln(4)
 
-                # --- DETALLE PARADAS PROGRAMADAS (NUEVO BLOQUE) ---
+                # --- DETALLE PARADAS PROGRAMADAS ---
                 df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
                 if not df_maq_paradas.empty:
                     check_space(pdf, 40)
@@ -608,22 +616,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.image(tmp1.name, x=col1_x, y=y_base, w=90)
                 os.remove(tmp1.name)
 
-            # --- TORTA 2: ESPECÍFICO FALLAS / GESTIÓN (DINÁMICO POR ÁREA/MACRO) ---
-            df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión'].copy()
+            # --- TORTA 2: ESPECÍFICO FALLAS / GESTIÓN (POR ÁREA/MACRO) ---
+            df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión']
             if not df_fallas_grupo.empty:
-                
-                # Función inteligente para separar Gestión de Mantenimiento/Calidad/Fallas
-                def clasificar_macro(row):
-                    n1 = str(row.get('Nivel Evento 1', '')).strip().upper()
-                    n2 = str(row.get('Nivel Evento 2', '')).strip().upper()
-                    
-                    if 'GESTION' in n1 or 'GESTIÓN' in n1:
-                        return 'Gestión'
-                    if 'FALLA' in n1:
-                        return n2.title() if n2 not in ['NAN', 'NONE', ''] else 'Falla (Sin área)'
-                    return n1.title() if n1 not in ['NAN', 'NONE', ''] else 'Sin Clasificar'
-
-                df_fallas_grupo['Categoria_Macro'] = df_fallas_grupo.apply(clasificar_macro, axis=1)
                 resumen_fallas = df_fallas_grupo.groupby('Categoria_Macro')['Tiempo (Min)'].sum().reset_index()
                 
                 fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Categoria_Macro', hole=0.4, 
