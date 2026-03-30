@@ -1,3 +1,10 @@
+¡Perfecto! Al igual que hicimos en la versión anterior, voy a integrar la lógica para que cuando selecciones el reporte Semanal, el punto "2. Horarios y Tiempo de Apertura" muestre la grilla exacta de lunes a viernes desglosada por Turno (A, B, C, etc.).
+
+Esta vez, he adaptado la lógica para que funcione perfectamente con tu nueva estructura que recorre los datos por Grupos Fumiscor (Prensas Progresivas, Balancines, etc.) de manera dinámica en distintas páginas.
+
+Aquí tienes el código completo con la funcionalidad aplicada:
+
+Python
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -524,29 +531,122 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, ini_date, fin_da
                 tiempos_list.append({'Máquina': maq, 'Inicio': min_i, 'Fin': max_f, 'Total': total_active, 'NoReg': unregistered_time})
                 
             tiempo_teorico_grupo = sum((t['Fin'] - t['Inicio']) for t in tiempos_list) if tiempos_list else 0
-            
             df_horarios = pd.DataFrame(tiempos_list)
             
             if not df_horarios.empty:
-                df_res = df_horarios.sort_values('Máquina') if p_tipo == "Diario" else df_horarios.groupby('Máquina').mean().reset_index().sort_values('Máquina')
-                col_h1, col_h2, col_h3, col_h4 = ("Hora Inicio", "Hora Cierre", "Apertura Neta", "No Registrado") if p_tipo == "Diario" else ("Inicio Prom.", "Cierre Prom.", "Apertura Neta Prom.", "No Reg. Prom.")
-                
-                setup_table_header(pdf, theme_color)
-                pdf.set_font("Arial", 'B', 9)
-                pdf.cell(46, 7, clean_text("Maquina"), border=1, fill=True)
-                pdf.cell(28, 7, clean_text(col_h1), border=1, align='C', fill=True)
-                pdf.cell(28, 7, clean_text(col_h2), border=1, align='C', fill=True)
-                pdf.cell(44, 7, clean_text(col_h3), border=1, align='C', fill=True)
-                pdf.cell(44, 7, clean_text(col_h4), border=1, align='C', ln=True, fill=True)
-                
-                setup_table_row(pdf)
-                pdf.set_font("Arial", '', 9)
-                for _, r in df_res.iterrows():
-                    pdf.cell(46, 7, clean_text(str(r['Máquina'])[:22]), border=1)
-                    pdf.cell(28, 7, clean_text(mins_to_time_str(r['Inicio'])), border=1, align='C')
-                    pdf.cell(28, 7, clean_text(mins_to_time_str(r['Fin'])), border=1, align='C')
-                    pdf.cell(44, 7, clean_text(mins_to_duration_str(r['Total'])), border=1, align='C')
-                    pdf.cell(44, 7, clean_text(mins_to_duration_str(r['NoReg'])), border=1, align='C', ln=True)
+                if p_tipo == "Semanal":
+                    # === LÓGICA ESPECÍFICA SEMANAL DE LUNES A VIERNES POR TURNOS ===
+                    col_turno = next((c for c in df_pdf_g.columns if 'turno' in c.lower()), None)
+                    
+                    df_pdf_g_temp = df_pdf_g.copy()
+                    if not col_turno:
+                        df_pdf_g_temp['Turno_Temp'] = 'A'
+                        col_turno = 'Turno_Temp'
+                        
+                    tiempos_list_sem = []
+                    for (maq, fecha, turno), g_turn in df_pdf_g_temp.groupby(['Máquina', 'Fecha_Filtro', col_turno]):
+                        intervals_t = []
+                        for _, r in g_turn.iterrows():
+                            ini = parse_time_to_mins(r[col_inicio])
+                            fin = parse_time_to_mins(r[col_fin])
+                            if ini is not None and fin is not None:
+                                if fin < ini and (ini - fin) > 720: fin += 1440
+                                intervals_t.append([ini, fin])
+                        
+                        if not intervals_t: continue
+                        intervals_t.sort(key=lambda x: x[0])
+                        merged_t = [intervals_t[0]]
+                        for current in intervals_t[1:]:
+                            last = merged_t[-1]
+                            if current[0] <= last[1]: 
+                                last[1] = max(last[1], current[1])
+                            else:
+                                merged_t.append(current)
+                        
+                        min_i_t = merged_t[0][0]
+                        max_f_t = merged_t[-1][1]
+                        tiempos_list_sem.append({'Máquina': maq, 'Turno': str(turno).strip().upper(), 'Fecha': fecha, 'Inicio': min_i_t, 'Fin': max_f_t})
+                    
+                    df_horarios_sem = pd.DataFrame(tiempos_list_sem)
+                    
+                    if not df_horarios_sem.empty:
+                        df_horarios_sem['Dia'] = pd.to_datetime(df_horarios_sem['Fecha']).dt.weekday
+                        
+                        pdf.set_font("Arial", 'I', 9)
+                        pdf.set_text_color(100, 100, 100)
+                        pdf.cell(0, 5, clean_text("Horarios de apertura y cierre (Lunes a Viernes) detallados por Turno."), ln=True)
+                        pdf.ln(2)
+                        
+                        setup_table_header(pdf, theme_color)
+                        pdf.set_font("Arial", 'B', 8)
+                        pdf.cell(35, 7, clean_text("Maquina"), border=1, fill=True)
+                        pdf.cell(15, 7, clean_text("Turno"), border=1, align='C', fill=True)
+                        pdf.cell(28, 7, clean_text("Lunes"), border=1, align='C', fill=True)
+                        pdf.cell(28, 7, clean_text("Martes"), border=1, align='C', fill=True)
+                        pdf.cell(28, 7, clean_text("Miercoles"), border=1, align='C', fill=True)
+                        pdf.cell(28, 7, clean_text("Jueves"), border=1, align='C', fill=True)
+                        pdf.cell(28, 7, clean_text("Viernes"), border=1, align='C', ln=True, fill=True)
+                        
+                        setup_table_row(pdf)
+                        pdf.set_font("Arial", '', 8)
+                        
+                        for maq_name in sorted(df_horarios_sem['Máquina'].unique()):
+                            df_m = df_horarios_sem[df_horarios_sem['Máquina'] == maq_name]
+                            turnos = sorted(df_m['Turno'].unique())
+                            
+                            for i, t in enumerate(turnos):
+                                df_t = df_m[df_m['Turno'] == t]
+                                
+                                def get_dia_str(dia_idx):
+                                    row = df_t[df_t['Dia'] == dia_idx]
+                                    if not row.empty:
+                                        i_str = mins_to_time_str(row.iloc[0]['Inicio'])
+                                        f_str = mins_to_time_str(row.iloc[0]['Fin'])
+                                        return f"{i_str} - {f_str}"
+                                    return "-"
+                                    
+                                str_lun = get_dia_str(0) # Lunes
+                                str_mar = get_dia_str(1) # Martes
+                                str_mie = get_dia_str(2) # Miércoles
+                                str_jue = get_dia_str(3) # Jueves
+                                str_vie = get_dia_str(4) # Viernes
+                                
+                                lbl_maq = clean_text(str(maq_name)[:18]) if i == 0 else ""
+                                
+                                pdf.cell(35, 6, lbl_maq, border=1)
+                                pdf.cell(15, 6, clean_text(t), border=1, align='C')
+                                pdf.cell(28, 6, clean_text(str_lun), border=1, align='C')
+                                pdf.cell(28, 6, clean_text(str_mar), border=1, align='C')
+                                pdf.cell(28, 6, clean_text(str_mie), border=1, align='C')
+                                pdf.cell(28, 6, clean_text(str_jue), border=1, align='C')
+                                pdf.cell(28, 6, clean_text(str_vie), border=1, align='C', ln=True)
+                        pdf.ln(5)
+                    else:
+                        pdf.set_font("Arial", '', 10)
+                        pdf.cell(0, 8, clean_text("No hay datos de turnos validos para calcular."), ln=True)
+
+                else:
+                    # --- LÓGICA ORIGINAL PARA DIARIO Y MENSUAL ---
+                    df_res = df_horarios.sort_values('Máquina') if p_tipo == "Diario" else df_horarios.groupby('Máquina').mean().reset_index().sort_values('Máquina')
+                    col_h1, col_h2, col_h3, col_h4 = ("Hora Inicio", "Hora Cierre", "Apertura Neta", "No Registrado") if p_tipo == "Diario" else ("Inicio Prom.", "Cierre Prom.", "Apertura Neta Prom.", "No Reg. Prom.")
+                    
+                    setup_table_header(pdf, theme_color)
+                    pdf.set_font("Arial", 'B', 9)
+                    pdf.cell(46, 7, clean_text("Maquina"), border=1, fill=True)
+                    pdf.cell(28, 7, clean_text(col_h1), border=1, align='C', fill=True)
+                    pdf.cell(28, 7, clean_text(col_h2), border=1, align='C', fill=True)
+                    pdf.cell(44, 7, clean_text(col_h3), border=1, align='C', fill=True)
+                    pdf.cell(44, 7, clean_text(col_h4), border=1, align='C', ln=True, fill=True)
+                    
+                    setup_table_row(pdf)
+                    pdf.set_font("Arial", '', 9)
+                    for _, r in df_res.iterrows():
+                        pdf.cell(46, 7, clean_text(str(r['Máquina'])[:22]), border=1)
+                        pdf.cell(28, 7, clean_text(mins_to_time_str(r['Inicio'])), border=1, align='C')
+                        pdf.cell(28, 7, clean_text(mins_to_time_str(r['Fin'])), border=1, align='C')
+                        pdf.cell(44, 7, clean_text(mins_to_duration_str(r['Total'])), border=1, align='C')
+                        pdf.cell(44, 7, clean_text(mins_to_duration_str(r['NoReg'])), border=1, align='C', ln=True)
+                    pdf.ln(5)
             else:
                 pdf.set_font("Arial", '', 10)
                 pdf.cell(0, 8, clean_text("No hay datos de horarios validos en este grupo."), ln=True)
