@@ -139,6 +139,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 texto_completo = f"{row.get('Nivel Evento 1','')} {row.get('Nivel Evento 2','')} {row.get('Nivel Evento 3','')} {row.get('Nivel Evento 4','')} ".upper()
                 if 'PRODUCCION' in texto_completo or 'PRODUCCIÓN' in texto_completo: return 'Producción'
                 if 'PROYECTO' in texto_completo: return 'Proyecto'
+                # Captura tanto Baño como Refrigerio como 'Descanso' general
                 if 'BAÑO' in texto_completo or 'BANO' in texto_completo or 'REFRIGERIO' in texto_completo: return 'Descanso'
                 if 'PARADA PROGRAMADA' in texto_completo: return 'Parada Programada'
                 return 'Falla/Gestión'
@@ -705,7 +706,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             operadores_activos = [op for op in df_pdf['Operador'].unique() if pd.notna(op) and op != '-']
             ops_individuales = []
             for op in operadores_activos:
-                # Separamos los nombres por si trabajaron en dupla (ej: "Carlos / Flavio")
                 ops_individuales.extend([o.strip() for o in op.split('/')]) 
             df_filt = op_target_df[op_target_df['Operador'].isin(ops_individuales)].copy()
 
@@ -752,35 +752,57 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
+        # --- NUEVA LÓGICA DE EXTRACCIÓN DIRECTA 100% FIABLE ---
+        # En vez de depender ciegamente de la columna 'BreakTime' o 'BathTime', construimos 
+        # la data agrupando los eventos crudos que coincidan con la palabra clave
+        resumen_eventos = {}
+        
+        if not df_pdf.empty:
+            mask = df_pdf[['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']].apply(
+                lambda row: any(isinstance(val, str) and any(kw in val.upper() for kw in palabras_clave) for val in row), axis=1
+            )
+            df_ev = df_pdf[mask]
+            
+            for _, r in df_ev.iterrows():
+                tiempo = float(r['Tiempo (Min)'])
+                ops = str(r['Operador']).split('/')
+                for op in ops:
+                    op = op.strip()
+                    if op and op != '-':
+                        if op not in resumen_eventos:
+                            resumen_eventos[op] = {'tiempo': 0.0, 'cantidad': 0}
+                        resumen_eventos[op]['tiempo'] += tiempo
+                        resumen_eventos[op]['cantidad'] += 1
+
+        # Respaldo: Si la tabla op_target_df sí tiene tiempos para este operador pero no hay evento registrado, sumamos.
         if not op_target_df.empty and db_col in op_target_df.columns:
             df_temp = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
-            
-            # Respaldo para que no se pierdan operarios
             if df_temp.empty and not df_pdf.empty:
-                operadores_activos = [op for op in df_pdf['Operador'].unique() if pd.notna(op) and op != '-']
-                ops_individuales = []
-                for op in operadores_activos:
-                    ops_individuales.extend([o.strip() for o in op.split('/')])
-                df_temp = op_target_df[op_target_df['Operador'].isin(ops_individuales)].copy()
-
-            df_filtrado = df_temp[df_temp[db_col] > 0].sort_values(db_col, ascending=False)
+                ops_activos = []
+                for op_list in df_pdf['Operador'].unique():
+                    if pd.notna(op_list) and op_list != '-':
+                        ops_activos.extend([o.strip() for o in op_list.split('/')])
+                df_temp = op_target_df[op_target_df['Operador'].isin(ops_activos)].copy()
             
-            if not df_filtrado.empty:
-                # --- Conteo de eventos desde los registros detallados ---
-                conteo_eventos = {}
-                if not df_pdf.empty:
-                    # Buscamos en el árbol de eventos si pertenece a Baño o Refrigerio
-                    mask = df_pdf[['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']].apply(
-                        lambda row: any(isinstance(val, str) and any(kw in val.upper() for kw in palabras_clave) for val in row), axis=1
-                    )
-                    df_ev = df_pdf[mask]
-                    for _, r in df_ev.iterrows():
-                        ops = str(r['Operador']).split('/')
-                        for op in ops:
-                            op = op.strip()
-                            if op and op != '-':
-                                conteo_eventos[op] = conteo_eventos.get(op, 0) + 1
+            for _, r in df_temp.iterrows():
+                op = str(r['Operador']).strip()
+                t_acum = float(r[db_col]) if pd.notna(r[db_col]) else 0.0
+                if t_acum > 0:
+                    if op not in resumen_eventos:
+                        resumen_eventos[op] = {'tiempo': t_acum, 'cantidad': 1} # Forzamos un evento si el MES lo reportó
+                    else:
+                        # Si el MES reporta más tiempo del que hay en eventos, tomamos el mayor
+                        resumen_eventos[op]['tiempo'] = max(resumen_eventos[op]['tiempo'], t_acum)
 
+        # Si tenemos datos, dibujamos la tabla
+        if resumen_eventos:
+            # Transformamos el diccionario en un DataFrame para ordenarlo cómodamente
+            df_res = pd.DataFrame([
+                {'Operador': op, 'Minutos': data['tiempo'], 'Cantidad': data['cantidad']}
+                for op, data in resumen_eventos.items() if data['tiempo'] > 0
+            ]).sort_values('Minutos', ascending=False)
+            
+            if not df_res.empty:
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 9)
                 pdf.cell(80, 7, clean_text("Operador"), border=1, align='L', fill=True)
@@ -790,30 +812,18 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 9)
                 
-                for _, r in df_filtrado.iterrows():
-                    op_name = clean_text(r['Operador'])
-                    
-                    cant = 0
-                    for key_op, count in conteo_eventos.items():
-                        if key_op.upper() in op_name.upper() or op_name.upper() in key_op.upper():
-                            cant = count
-                            break
-                            
-                    if cant == 0 and r[db_col] > 0:
-                        cant = 1
-                        
-                    pdf.cell(80, 7, " " + op_name[:35], border=1)
-                    pdf.cell(55, 7, f"{r[db_col]:.1f}", border=1, align='C')
-                    pdf.cell(55, 7, str(cant), border=1, align='C', ln=True)
+                for _, r in df_res.iterrows():
+                    pdf.cell(80, 7, " " + clean_text(r['Operador'])[:35], border=1)
+                    pdf.cell(55, 7, f"{r['Minutos']:.1f}", border=1, align='C')
+                    pdf.cell(55, 7, str(int(r['Cantidad'])), border=1, align='C', ln=True)
                 pdf.ln(5)
-            else:
-                pdf.set_font("Arial", '', 10)
-                pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
-        else:
-            pdf.set_font("Arial", '', 10)
-            pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
+                return # Dibujó la tabla, sale de la función.
+                
+        # Si llegamos hasta acá es porque realmente no hubo ningún tiempo de descanso registrado.
+        pdf.set_font("Arial", '', 10)
+        pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
 
-    # Dibuja la tabla de Baño y luego, abajo, dibuja la de Refrigerio
+    # Las llamadas quedan tal cual, manteniendo dos tablas completamente separadas
     agregar_tabla_tiempos("Tiempo de Bano Acumulado (Min)", "BathTime", ["BAÑO", "BANO"])
     agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado (Min)", "BreakTime", ["REFRIGERIO"])
 
