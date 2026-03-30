@@ -116,22 +116,26 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_raw = conn.query(q_event)
 
         if not df_raw.empty:
+            # Separamos de forma limpia Fecha y Hora
             df_raw['Fecha_Filtro'] = pd.to_datetime(df_raw['Fecha_Filtro']).dt.date
             df_raw['Inicio_Str'] = pd.to_datetime(df_raw['Inicio']).dt.strftime('%H:%M')
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
-            # Consolidamos el detalle ignorando los None
+            # MAGIA PANDAS ANTI-DUPLICADOS: Consolidar detalle inteligente
             def consolidar_detalle(row):
-                n3 = str(row.get('Nivel Evento 3', '')).strip()
-                n2 = str(row.get('Nivel Evento 2', '')).strip()
-                n1 = str(row.get('Nivel Evento 1', '')).strip()
+                n1 = str(row.get('Nivel Evento 1', '')).strip().replace('None', '').replace('nan', '')
+                n2 = str(row.get('Nivel Evento 2', '')).strip().replace('None', '').replace('nan', '')
+                n3 = str(row.get('Nivel Evento 3', '')).strip().replace('None', '').replace('nan', '')
                 
-                if n3 and n3.lower() not in ['none', 'nan', 'null']: return n3
-                if n2 and n2.lower() not in ['none', 'nan', 'null']: return n2
-                if n1 and n1.lower() not in ['none', 'nan', 'null']: return n1
-                return 'Detalle no especificado'
+                # Buscamos el nivel más profundo que tenga información real y no sea una repetición
+                detalle_final = "Detalle no especificado"
+                if n1: detalle_final = n1
+                if n2 and n2.lower() != n1.lower(): detalle_final = n2
+                if n3 and n3.lower() not in [n1.lower(), n2.lower()]: detalle_final = n3
+                
+                return detalle_final
 
             df_raw['Detalle_Unificado'] = df_raw.apply(consolidar_detalle, axis=1)
 
@@ -357,14 +361,21 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         
         if mostrar_categoria:
             w_f, w_i, w_f2, w_c, w_d, w_m, w_o = 15, 11, 11, 25, 75, 11, 42
-            for col, w in zip(["Fecha", "Ini.", "Fin", "Categoria", "Detalle", "Min", "Operador"], [w_f, w_i, w_f2, w_c, w_d, w_m, w_o]):
+            headers = ["Fecha", "Ini.", "Fin", "Categoria", "Detalle", "Min", "Operador"]
+            # Aquí se soluciona la ubicación y alineación de los encabezados (C=Centro, L=Izquierda)
+            aligns = ['C', 'C', 'C', 'L', 'L', 'C', 'L']
+            
+            for col, w, al in zip(headers, [w_f, w_i, w_f2, w_c, w_d, w_m, w_o], aligns):
                 ln = True if col == "Operador" else False
-                pdf.cell(w, 7, col, border=1, align='C' if col!="Categoria" else 'L', fill=True, ln=ln)
+                pdf.cell(w, 7, col, border=1, align=al, fill=True, ln=ln)
         else:
             w_f, w_i, w_f2, w_d, w_m, w_o = 18, 14, 14, 86, 13, 45
-            for col, w in zip(["Fecha", "Ini.", "Fin", "Detalle Evento", "Min", "Operador"], [w_f, w_i, w_f2, w_d, w_m, w_o]):
+            headers = ["Fecha", "Ini.", "Fin", "Detalle Evento", "Min", "Operador"]
+            aligns = ['C', 'C', 'C', 'L', 'C', 'L']
+            
+            for col, w, al in zip(headers, [w_f, w_i, w_f2, w_d, w_m, w_o], aligns):
                 ln = True if col == "Operador" else False
-                pdf.cell(w, 7, col, border=1, align='C', fill=True, ln=ln)
+                pdf.cell(w, 7, col, border=1, align=al, fill=True, ln=ln)
         
         setup_table_row(pdf)
         pdf.set_font("Arial", '', 8)
@@ -377,11 +388,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             val_inicio = str(row['Inicio_Str'])[:5] if pd.notna(row['Inicio_Str']) else "-"
             val_fin = str(row['Fin_Str'])[:5] if pd.notna(row['Fin_Str']) else "-"
             minutos = f"{row['Tiempo (Min)']:.0f}"
-            operador = str(row['Operador'])[:22]
-            detalle_str = str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else "-"
+            
+            # Agregamos padding visual para que el texto respire y no toque la línea
+            operador = " " + str(row['Operador'])[:22]
+            detalle_str = " " + str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else " -"
             
             if mostrar_categoria:
-                # Buscamos algo limpio que no sea None para la columna Categoría
                 cat_str = str(row.get('Nivel Evento 1', '')).replace('None', '').replace('nan', '').strip()
                 if not cat_str:
                     cat_str = str(row.get('Nivel Evento 3', '')).replace('None', '').replace('nan', '').strip()
@@ -391,16 +403,16 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.cell(w_i, 6, val_inicio, border='B', align='C')
                 pdf.cell(w_f2, 6, val_fin, border='B', align='C')
                 pdf.cell(w_c, 6, clean_text(categoria_str), border='B', align='L') 
-                pdf.cell(w_d, 6, clean_text(detalle_str[:60]), border='B')
+                pdf.cell(w_d, 6, clean_text(detalle_str[:60]), border='B', align='L')
                 pdf.cell(w_m, 6, minutos, border='B', align='C')
-                pdf.cell(w_o, 6, clean_text(operador), border='B', ln=True)
+                pdf.cell(w_o, 6, clean_text(operador), border='B', align='L', ln=True)
             else:
                 pdf.cell(w_f, 6, val_fecha, border='B', align='C')
                 pdf.cell(w_i, 6, val_inicio, border='B', align='C')
                 pdf.cell(w_f2, 6, val_fin, border='B', align='C')
-                pdf.cell(w_d, 6, clean_text(detalle_str[:60]), border='B')
+                pdf.cell(w_d, 6, clean_text(detalle_str[:60]), border='B', align='L')
                 pdf.cell(w_m, 6, minutos, border='B', align='C')
-                pdf.cell(w_o, 6, clean_text(operador), border='B', ln=True)
+                pdf.cell(w_o, 6, clean_text(operador), border='B', align='L', ln=True)
 
     # ==================================
     # RECORRIDO POR CADA GRUPO 
@@ -478,7 +490,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.cell(46, 7, clean_text("Maquina"), border=1, fill=True)
+                pdf.cell(46, 7, clean_text("Maquina"), border=1, align='L', fill=True)
                 pdf.cell(28, 7, clean_text(col_h1), border=1, align='C', fill=True)
                 pdf.cell(28, 7, clean_text(col_h2), border=1, align='C', fill=True)
                 pdf.cell(44, 7, clean_text(col_h3), border=1, align='C', fill=True)
@@ -487,7 +499,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 9)
                 for _, r in df_res.iterrows():
-                    pdf.cell(46, 7, clean_text(str(r['Máquina'])[:22]), border=1)
+                    pdf.cell(46, 7, " " + clean_text(str(r['Máquina'])[:22]), border=1, align='L')
                     pdf.cell(28, 7, clean_text(mins_to_time_str(r['Inicio'])), border=1, align='C')
                     pdf.cell(28, 7, clean_text(mins_to_time_str(r['Fin'])), border=1, align='C')
                     pdf.cell(44, 7, clean_text(mins_to_duration_str(r['Total'])), border=1, align='C')
@@ -504,17 +516,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         
         if not df_pdf_g.empty:
             
-            # --- FILTRO GLOBAL INTELIGENTE ---
-            # Une los 3 niveles en un solo texto gigante y busca ahí adentro. 
-            # Así, si "PRODUCCION" se escondió en el Nivel 3 o en el 2, lo encuentra sí o sí.
             df_pdf_g['Filtro_Global'] = df_pdf_g['Nivel Evento 1'].astype(str) + " " + df_pdf_g['Nivel Evento 2'].astype(str) + " " + df_pdf_g['Nivel Evento 3'].astype(str)
             df_pdf_g['Filtro_Global'] = df_pdf_g['Filtro_Global'].str.upper()
 
             df_produccion_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PRODUCCION|PRODUCCIÓN', na=False)]
             df_proyectos_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PROYECTO', na=False)]
             df_paradas_area = df_pdf_g[df_pdf_g['Filtro_Global'].str.contains('PARADA PROGRAMADA', na=False)]
-            
-            # Todo lo que NO está en las 3 de arriba, es Tiempo Perdido puro y duro.
             df_fallas_area = df_pdf_g[~df_pdf_g['Filtro_Global'].str.contains('PRODUCCION|PRODUCCIÓN|PROYECTO|PARADA PROGRAMADA', na=False)]
             
             for maq in sorted(df_pdf_g['Máquina'].unique()):
@@ -538,18 +545,18 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.ln(2)
                 
                 setup_table_header(pdf, theme_color)
-                pdf.set_font("Arial", 'B', 8)
+                pdf.set_font("Arial", 'B', 9)
                 
                 if t_proy > 0:
                     for col in ["Tiempo de produccion", "Tiempos Perdidos", "Parada programada", "Tiempo de proyecto"]:
-                        pdf.cell(47 if col!="Parada programada" else 48, 6, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Tiempo de proyecto" else False)
+                        pdf.cell(47 if col!="Parada programada" else 48, 7, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Tiempo de proyecto" else False)
                     setup_table_row(pdf)
                     pdf.set_font("Arial", '', 9)
                     for v in [t_prod, t_falla, t_pp, t_proy]:
                         pdf.cell(47 if v!=t_pp else 48, 7, clean_text(mins_to_duration_str(v)), border=1, align='C', ln=True if v==t_proy else False)
                 else:
                     for col in ["Tiempo de produccion", "Tiempos Perdidos", "Parada programada"]:
-                        pdf.cell(63 if col!="Parada programada" else 64, 6, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Parada programada" else False)
+                        pdf.cell(63 if col!="Parada programada" else 64, 7, clean_text(col), border=1, align='C', fill=True, ln=True if col=="Parada programada" else False)
                     setup_table_row(pdf)
                     pdf.set_font("Arial", '', 9)
                     for v in [t_prod, t_falla, t_pp]:
@@ -580,6 +587,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     pdf.set_font("Arial", 'B', 9)
                     pdf.set_text_color(*comp_color)
                     pdf.cell(0, 6, clean_text("> Detalle de tiempos perdidos registrados:"), ln=True)
+                    # Aquí usamos la columna unificada final
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Unificado', mostrar_categoria=True)
                     pdf.ln(2)
                     
@@ -587,13 +595,11 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             check_space(pdf, 75)
             print_section_title(pdf, "4. Resumen General de Tiempos del Grupo", theme_color)
             
-            # --- ARREGLO PARA EL GRÁFICO DE TORTA ---
-            # Busca automáticamente el texto válido para que no diga "S/D" o "None"
+            # Para el gráfico de torta general usamos la Categoría (Nivel 1)
             def obtener_categoria_real(row):
-                for col in ['Nivel Evento 3', 'Nivel Evento 2', 'Nivel Evento 1']:
-                    val = str(row.get(col, '')).strip()
-                    if val.upper() not in ['NONE', 'NAN', 'S/D', '', 'NULL']:
-                        return val.title()
+                for col in ['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3']:
+                    val = str(row.get(col, '')).strip().replace('None', '').replace('nan', '')
+                    if val: return val.title()
                 return 'Sin Clasificar'
                 
             df_pdf_g['Categoria_Torta'] = df_pdf_g.apply(obtener_categoria_real, axis=1)
@@ -657,8 +663,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             
             df_prod_group = df_prod_pdf_g.groupby(['Máquina', 'Código'])[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index().sort_values('Máquina')
             for _, row in df_prod_group.iterrows():
-                pdf.cell(40, 7, clean_text(str(row['Máquina'])[:25]), border='B')
-                pdf.cell(60, 7, clean_text(str(row['Código'])[:40]), border='B') 
+                pdf.cell(40, 7, " " + clean_text(str(row['Máquina'])[:25]), border='B')
+                pdf.cell(60, 7, " " + clean_text(str(row['Código'])[:40]), border='B') 
                 pdf.cell(25, 7, clean_text(str(int(row['Buenas']))), border='B', align='C')
                 pdf.cell(25, 7, clean_text(str(int(row['Retrabajo']))), border='B', align='C')
                 pdf.cell(30, 7, clean_text(str(int(row['Observadas']))), border='B', align='C', ln=True)
@@ -691,8 +697,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         
         for _, row in df_filt.iterrows():
             perf_val = int(round(pd.to_numeric(row['PERFORMANCE'], errors='coerce') or 0))
-            pdf.cell(100, 7, clean_text(str(row['Operador'])[:50]), border='B')
-            pdf.cell(60, 7, clean_text(str(row['Fábrica'])[:30]), border='B')
+            pdf.cell(100, 7, " " + clean_text(str(row['Operador'])[:50]), border='B')
+            pdf.cell(60, 7, " " + clean_text(str(row['Fábrica'])[:30]), border='B')
             
             if perf_val >= 90: pdf.set_text_color(33, 195, 84)
             elif perf_val >= 80: pdf.set_text_color(200, 150, 0)
@@ -716,12 +722,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             if not df_filtrado.empty:
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.cell(100, 7, clean_text("Operador"), border=1, align='C', fill=True)
+                pdf.cell(100, 7, clean_text("Operador"), border=1, align='L', fill=True)
                 pdf.cell(90, 7, clean_text("Total Acumulado (Min)"), border=1, align='C', ln=True, fill=True)
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 9)
                 for _, r in df_filtrado.iterrows():
-                    pdf.cell(100, 7, clean_text(r['Operador']), border=1)
+                    pdf.cell(100, 7, " " + clean_text(r['Operador']), border=1)
                     pdf.cell(90, 7, f"{r[db_col]:.1f}", border=1, align='C', ln=True)
                 pdf.ln(5)
             else:
