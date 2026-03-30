@@ -130,22 +130,19 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
 
             # --- FUNCIONES DE CLASIFICACIÓN INTELIGENTE ---
             def obtener_ultimo_nivel(row):
-                # Extrae los 4 niveles limpiando la basura (Nones, nans)
                 niveles = [str(row.get(col, '')).strip() for col in ['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']]
                 validos = [n for n in niveles if n.lower() not in ['none', 'nan', '', 'null']]
                 
                 if not validos: return "Sin detalle en sistema"
                 
-                # Regla Anti-Redundancia: Extraemos solo las palabras únicas manteniendo el orden
                 unicos = []
                 for v in validos:
                     if v.upper() not in [u.upper() for u in unicos]:
                         unicos.append(v)
                 
-                return unicos[-1] # Devolvemos el nivel real más profundo y útil
+                return unicos[-1]
 
             def categorizar_estado(row):
-                # Concatenamos todo para no perder ninguna palabra clave
                 texto_completo = f"{row.get('Nivel Evento 1','')} {row.get('Nivel Evento 2','')} {row.get('Nivel Evento 3','')} {row.get('Nivel Evento 4','')} ".upper()
                 
                 if 'PRODUCCION' in texto_completo or 'PRODUCCIÓN' in texto_completo: return 'Producción'
@@ -601,12 +598,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.image(tmp1.name, x=col1_x, y=y_base, w=90)
                 os.remove(tmp1.name)
 
-            # --- TORTA 2: ESPECÍFICO PARADAS PROGRAMADAS ---
-            df_paradas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Parada Programada']
-            if not df_paradas_grupo.empty:
-                resumen_pp = df_paradas_grupo.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index()
-                fig_p = px.pie(resumen_pp, values='Tiempo (Min)', names='Detalle_Final', hole=0.4, 
-                               title="Detalle Paradas Programadas (Hs)", color_discrete_sequence=px.colors.qualitative.Set2)
+            # --- TORTA 2: ESPECÍFICO FALLAS / GESTIÓN ---
+            df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión']
+            if not df_fallas_grupo.empty:
+                resumen_fallas = df_fallas_grupo.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index()
+                fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Detalle_Final', hole=0.4, 
+                               title="Detalle de Fallas por Área (Hs)", color_discrete_sequence=px.colors.qualitative.Set1)
                 fig_p.update_layout(width=350, height=270, margin=dict(t=30, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=-0.1))
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp2:
@@ -617,7 +614,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.set_xy(col2_x + 10, y_base + 30)
                 pdf.set_font("Arial", 'I', 9)
                 pdf.set_text_color(100)
-                pdf.cell(0, 10, clean_text("Sin Paradas Programadas registradas."))
+                pdf.cell(0, 10, clean_text("Sin Fallas registradas."))
 
             pdf.set_y(y_base + 75)
             pdf.ln(5)
