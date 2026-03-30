@@ -129,6 +129,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
 
             # --- NUEVO: CONSOLIDAR EVENTOS DUPLICADOS ---
+            # Agrupamos por el ID único del evento para unificar operadores en una sola fila
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({
                 'Operador': lambda x: ' / '.join(x.unique())
@@ -748,14 +749,14 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
 
     pdf.set_link(link_tiempos) 
     
-    def agregar_tabla_tiempos(titulo, db_col):
+    def agregar_tabla_tiempos(titulo, db_col, palabras_clave):
         check_space(pdf, 30)
         print_section_title(pdf, titulo, theme_color)
         
         if not op_target_df.empty and db_col in op_target_df.columns:
             df_temp = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
             
-            # Mismo respaldo para los tiempos de baño y refrigerio
+            # Respaldo para que no se pierdan operarios
             if df_temp.empty and not df_pdf.empty:
                 operadores_activos = [op for op in df_pdf['Operador'].unique() if pd.notna(op) and op != '-']
                 ops_individuales = []
@@ -766,22 +767,56 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             df_filtrado = df_temp[df_temp[db_col] > 0].sort_values(db_col, ascending=False)
             
             if not df_filtrado.empty:
+                # --- NUEVO: Conteo de eventos desde los registros detallados ---
+                conteo_eventos = {}
+                if not df_pdf.empty:
+                    # Buscamos en el árbol de eventos si pertenece a Baño o Refrigerio
+                    mask = df_pdf[['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']].apply(
+                        lambda row: any(isinstance(val, str) and any(kw in val.upper() for kw in palabras_clave) for val in row), axis=1
+                    )
+                    df_ev = df_pdf[mask]
+                    for _, r in df_ev.iterrows():
+                        # Si hay varios operarios separados por "/", les sumamos 1 evento a cada uno
+                        ops = str(r['Operador']).split('/')
+                        for op in ops:
+                            op = op.strip()
+                            if op and op != '-':
+                                conteo_eventos[op] = conteo_eventos.get(op, 0) + 1
+
                 setup_table_header(pdf, theme_color)
                 pdf.set_font("Arial", 'B', 9)
-                pdf.cell(100, 7, clean_text("Operador"), border=1, align='L', fill=True)
-                pdf.cell(90, 7, clean_text("Total Acumulado (Min)"), border=1, align='C', ln=True, fill=True)
+                pdf.cell(80, 7, clean_text("Operador"), border=1, align='L', fill=True)
+                pdf.cell(55, 7, clean_text("Total Acumulado (Min)"), border=1, align='C', fill=True)
+                pdf.cell(55, 7, clean_text("Cantidad de Eventos"), border=1, align='C', ln=True, fill=True)
+                
                 setup_table_row(pdf)
                 pdf.set_font("Arial", '', 9)
+                
                 for _, r in df_filtrado.iterrows():
-                    pdf.cell(100, 7, " " + clean_text(r['Operador']), border=1)
-                    pdf.cell(90, 7, f"{r[db_col]:.1f}", border=1, align='C', ln=True)
+                    op_name = clean_text(r['Operador'])
+                    
+                    # Buscamos cuántos eventos tuvo ese operador en particular
+                    cant = 0
+                    for key_op, count in conteo_eventos.items():
+                        if key_op.upper() in op_name.upper() or op_name.upper() in key_op.upper():
+                            cant = count
+                            break
+                            
+                    # Lógica de respaldo: Si el sistema acumuló tiempo pero no hay un registro del evento, 
+                    # asumimos que salió al menos 1 vez para que tenga sentido matemático.
+                    if cant == 0 and r[db_col] > 0:
+                        cant = 1
+                        
+                    pdf.cell(80, 7, " " + op_name, border=1)
+                    pdf.cell(55, 7, f"{r[db_col]:.1f}", border=1, align='C')
+                    pdf.cell(55, 7, str(cant), border=1, align='C', ln=True)
                 pdf.ln(5)
             else:
                 pdf.set_font("Arial", '', 10)
                 pdf.cell(0, 8, clean_text("No se registraron tiempos para este evento en el periodo."), ln=True)
 
-    agregar_tabla_tiempos("Tiempo de Bano Acumulado (Min)", "BathTime")
-    agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado (Min)", "BreakTime")
+    agregar_tabla_tiempos("Tiempo de Bano Acumulado (Min)", "BathTime", ["BAÑO", "BANO"])
+    agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado (Min)", "BreakTime", ["REFRIGERIO"])
 
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf.output(temp_pdf.name)
