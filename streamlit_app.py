@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import tempfile
 import os
+import calendar
 from fpdf import FPDF
 from datetime import timedelta
 
@@ -86,7 +87,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
 
         # --- 1. DATOS DE OEE POR MÁQUINA ---
         if tipo_periodo == "Mensual":
-            # Uso tabla M_03 para promedios mensuales exactos
             q_oee = f"""
                 SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, 
                        p.Performance as PERFORMANCE, p.Quality as CALIDAD
@@ -94,7 +94,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio}
             """
         else:
-            # Uso tabla D_03 y promedio (para Diario o Semanal)
             q_oee = f"""
                 SELECT c.Name as Máquina, AVG(p.Oee) as OEE, AVG(p.Availability) as DISPONIBILIDAD, 
                        AVG(p.Performance) as PERFORMANCE, AVG(p.Quality) as CALIDAD
@@ -147,7 +146,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_op_target = conn.query(q_op)
 
         # --- 4. DETALLE DE EVENTOS (RAW) ---
-        # Los eventos siempre se buscan por fecha exacta (no hay tabla resumen mensual de eventos puros con hora de inicio/fin)
         q_event = f"""
             SELECT c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], t.Area as [Nivel Evento 1], 
@@ -156,7 +154,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                    tu.Name as Turno
             FROM EVENT_01 e
             LEFT JOIN CELL c ON e.CellId = c.CellId
-            LEFT JOIN EVENTTYPE t ON e.InitialEventTypeId = t.EventTypeId
+            LEFT JOIN EVENTTYPE t ON e.EventTypeLevel1 = t.EventTypeId
             LEFT JOIN FACTORY f ON e.FactoryId = f.FactoryId
             LEFT JOIN TURN tu ON e.TurnId = tu.TurnId
             LEFT JOIN EVENT_OPERATOR_01 eo ON e.Id = eo.EventId
@@ -165,7 +163,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         """
         df_raw = conn.query(q_event)
 
-        # Acondicionamiento de formatos en Pandas para que el PDF no falle
         if not df_raw.empty:
             df_raw['Fecha_Filtro'] = pd.to_datetime(df_raw['Fecha_Filtro'])
             df_raw['Inicio_Str'] = pd.to_datetime(df_raw['Inicio']).dt.strftime('%H:%M')
@@ -194,19 +191,27 @@ with col_p2:
     
     pdf_ini, pdf_fin, pdf_mes, pdf_anio = None, None, None, None
     pdf_label = ""
+    file_label = ""
 
     if pdf_tipo == "Diario":
         pdf_fecha = st.date_input("Día para PDF:", value=today)
         pdf_ini = pdf_fin = pd.to_datetime(pdf_fecha)
-        pdf_label = f"Día {pdf_fecha.strftime('%d-%m-%Y')}"
+        pdf_label = f"Dia {pdf_fecha.strftime('%d-%m-%Y')}"
+        file_label = pdf_label
         
     elif pdf_tipo == "Semanal":
-        # Selección de semana adaptada a un Date Input que auto-calcula Lunes-Domingo
         fecha_ref = st.date_input("Seleccione un día de la semana deseada:", value=today)
         dt_ref = pd.to_datetime(fecha_ref)
         pdf_ini = dt_ref - timedelta(days=dt_ref.weekday()) # Lunes
         pdf_fin = pdf_ini + timedelta(days=6) # Domingo
-        pdf_label = f"Semana del {pdf_ini.strftime('%d/%m')} al {pdf_fin.strftime('%d/%m')}"
+        
+        # Calcular el número de semana
+        semana_num = pdf_ini.isocalendar().week
+        
+        # Etiqueta visual para la UI y PDF
+        pdf_label = f"Semana {semana_num} ({pdf_ini.strftime('%d/%m/%Y')} al {pdf_fin.strftime('%d/%m/%Y')})"
+        # Etiqueta segura para el nombre del archivo (sin barras)
+        file_label = f"Semana_{semana_num}_{pdf_ini.strftime('%d-%m-%Y')}_al_{pdf_fin.strftime('%d-%m-%Y')}"
         st.info(f"Rango calculado: {pdf_label}")
         
     elif pdf_tipo == "Mensual":
@@ -218,10 +223,12 @@ with col_p2:
         pdf_mes = mes_list.index(mes_sel) + 1
         pdf_anio = anio_sel
         pdf_ini = pd.to_datetime(f"{pdf_anio}-{pdf_mes}-01")
-        import calendar
         last_day = calendar.monthrange(pdf_anio, pdf_mes)[1]
         pdf_fin = pd.to_datetime(f"{pdf_anio}-{pdf_mes}-{last_day}")
-        pdf_label = f"Mes {mes_sel} {pdf_anio}"
+        
+        # Etiqueta visual y para archivo
+        pdf_label = f"{mes_sel} {pdf_anio}"
+        file_label = f"{mes_sel}_{pdf_anio}"
 
 # Descarga de datos basados en UI
 df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
@@ -229,7 +236,7 @@ df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_fro
 )
 
 # ==========================================
-# 4. FUNCIONES HELPER PDF (Sin Modificaciones)
+# 4. FUNCIONES HELPER PDF
 # ==========================================
 def parse_time_to_mins(t_str):
     try:
@@ -261,7 +268,7 @@ class ReportePDF(FPDF):
         self.set_font("Times", 'B', 16)
         self.set_text_color(*self.theme_color)
         self.cell(0, 10, clean_text(f"REPORTE GERENCIAL - {self.area.upper()}"), ln=True, align='R')
-        self.set_font("Arial", 'I', 9)
+        self.set_font("Arial", 'B', 10)
         self.set_text_color(100, 100, 100)
         self.cell(0, 6, clean_text(f"Periodo: {self.fecha_str}"), ln=True, align='R')
         self.ln(5)
@@ -349,7 +356,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
 
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
 
-    # Filtrar bases por Fábrica
     df_pdf = pd.DataFrame()
     if not df_pdf_raw.empty:
         df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
@@ -360,7 +366,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_prod_pdf = prod_target_df.copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
-    # Convertir métricas OEE a % (la BD las trae ej: 75.0, el PDF original esperaba 0.75 para graficar)
     if not oee_target_df.empty:
         for c in ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']:
             if c in oee_target_df.columns:
@@ -388,7 +393,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
     pdf.cell(0, 8, clean_text("> Performance General de Operarios"), ln=True, link=link_perfo)
     pdf.cell(0, 8, clean_text("> Tiempos de Baño y Refrigerio (General)"), ln=True, link=link_tiempos)
 
-    # Helper sub-tablas
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, mostrar_categoria=False):
         setup_table_header(pdf, theme_color)
         pdf.set_font("Arial", 'B', 8)
@@ -450,7 +454,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_pdf_g = df_pdf[df_pdf['Grupo_Máquina'] == g] if not df_pdf.empty else pd.DataFrame()
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g] if not df_prod_pdf.empty else pd.DataFrame()
         
-        # Métrica Grupo
         m_g = {'OEE': 0, 'DISPONIBILIDAD': 0, 'PERFORMANCE': 0, 'CALIDAD': 0}
         maq_del_grupo = [m for m, grp in MAQUINAS_MAP.items() if grp == g]
         if not oee_target_df.empty:
@@ -474,7 +477,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     print_pdf_metric_row(pdf, f"   > {maq}", df_m_oee.iloc[0].to_dict())
         pdf.ln(3)
 
-        # 2. HORARIOS
         check_space(pdf, 50)
         print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         tiempo_teorico_grupo = 0
@@ -534,7 +536,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.set_font("Arial", '', 10)
             pdf.cell(0, 8, clean_text("Sin datos de horarios documentados para el grupo."), ln=True)
 
-        # 3. FALLAS
         check_space(pdf, 40)
         print_section_title(pdf, "3. Analisis de Fallas y Paradas", theme_color)
         
@@ -610,7 +611,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     dibujar_tabla_eventos_detallada(df_maq_fallas, 'Nivel Evento 3', mostrar_categoria=True)
                     pdf.ln(2)
                     
-        # 4. TORTA TIEMPOS
         if not df_pdf_g.empty:
             check_space(pdf, 75)
             print_section_title(pdf, "4. Resumen General de Tiempos del Grupo", theme_color)
@@ -645,7 +645,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 os.remove(tmpfile2.name)
             pdf.ln(3)
 
-        # 5. PRODUCCIÓN
         if not df_prod_pdf_g.empty:
             check_space(pdf, 80)
             print_section_title(pdf, "5. Produccion por Maquina", theme_color)
@@ -697,7 +696,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
     print_section_title(pdf, "Performance de Operarios General", theme_color)
     
     if not op_target_df.empty:
-        # DB Performance ya viene en formato % (ej. 75.0)
         df_filt = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].sort_values('PERFORMANCE', ascending=False)
         
         check_space(pdf, 30)
@@ -725,7 +723,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.set_font("Arial", '', 9)
         pdf.ln(5)
 
-    # TIEMPOS DE BAÑO Y REFRIGERIO
     pdf.set_link(link_tiempos) 
     def agregar_tabla_tiempos(titulo, db_col):
         check_space(pdf, 30)
@@ -770,7 +767,7 @@ with col_p3:
             with st.spinner("Conectando con wii_bi y construyendo PDF..."):
                 try:
                     pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
-                    st.download_button("Descargar PDF Estampado", data=pdf_data, file_name=f"Estampado_{pdf_label.replace(' ', '_')}.pdf", mime="application/pdf", use_container_width=True)
+                    st.download_button("Descargar PDF Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
                     
@@ -779,6 +776,6 @@ with col_p3:
             with st.spinner("Conectando con wii_bi y construyendo PDF..."):
                 try:
                     pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
-                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{pdf_label.replace(' ', '_')}.pdf", mime="application/pdf", use_container_width=True)
+                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
