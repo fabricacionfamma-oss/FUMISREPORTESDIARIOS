@@ -253,7 +253,6 @@ def clean_text(text):
     return str(text).replace('•', '-').replace('➤', '>').encode('latin-1', 'replace').decode('latin-1')
 
 def check_space(pdf, required_height):
-    # Reducimos los márgenes de salto preventivo a lo mínimo indispensable para no dejar espacios gigantes
     if pdf.get_y() + required_height > 275 and pdf.get_y() > 40:
         pdf.add_page(); return True
     return False
@@ -484,35 +483,38 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if daily_stats:
                     df_trends = pd.DataFrame(daily_stats).sort_values('Fecha_DT')
                     
-                    # Gráfico 1: Apertura Neta
-                    check_space(pdf, 80)
-                    pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("> Tendencia: Horas Netas de Producción por Máquina"), ln=True)
-                    fig_neta = px.line(df_trends, x='Fecha', y='Apertura Neta (Hs)', color='Máquina', markers=True)
-                    fig_neta.update_yaxes(rangemode="tozero")
-                    fig_neta.update_layout(height=250, width=750, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_n:
-                        fig_neta.write_image(tmp_n.name, engine="kaleido"); pdf.image(tmp_n.name, w=180); os.remove(tmp_n.name)
-                    
-                    # Gráfico 2: Hora Inicio
-                    check_space(pdf, 80)
-                    pdf.ln(5); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("> Tendencia: Horario de Inicio de Turno (Apertura)"), ln=True)
-                    fig_ini = px.line(df_trends, x='Fecha', y='Hora Inicio', color='Máquina', markers=True)
-                    fig_ini.update_yaxes(tickmode='array', tickvals=list(range(0, 25, 2)), ticktext=[f"{i:02d}:00" for i in range(0, 25, 2)], range=[0, 24])
-                    fig_ini.update_layout(height=250, width=750, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_i:
-                        fig_ini.write_image(tmp_i.name, engine="kaleido"); pdf.image(tmp_i.name, w=180); os.remove(tmp_i.name)
-                    
-                    # Gráfico 3: Hora Cierre
-                    check_space(pdf, 80)
-                    pdf.ln(5); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("> Tendencia: Horario de Cierre de Turno"), ln=True)
-                    fig_fin = px.line(df_trends, x='Fecha', y='Hora Cierre', color='Máquina', markers=True)
-                    fig_fin.update_yaxes(tickmode='array', tickvals=list(range(0, 25, 2)), ticktext=[f"{i:02d}:00" for i in range(0, 25, 2)], range=[0, 24])
-                    fig_fin.update_layout(height=250, width=750, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_f:
-                        fig_fin.write_image(tmp_f.name, engine="kaleido"); pdf.image(tmp_f.name, w=180); os.remove(tmp_f.name)
+                    for maq in sorted(df_trends['Máquina'].unique()):
+                        df_maq_trends = df_trends[df_trends['Máquina'] == maq]
+                        
+                        check_space(pdf, 75)
+                        pdf.set_font("Arial", 'B', 11); pdf.set_text_color(*comp_color)
+                        pdf.cell(0, 6, clean_text(f">> Máquina: {maq} - Tendencia Mensual"), ln=True)
+                        
+                        # Grafico 1: Horas Netas
+                        fig_neta = px.line(df_maq_trends, x='Fecha', y='Apertura Neta (Hs)', markers=True, title="Horas Netas de Producción")
+                        fig_neta.update_traces(line_color=hex_theme)
+                        fig_neta.update_yaxes(rangemode="tozero")
+                        fig_neta.update_layout(height=250, width=400, margin=dict(t=40, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', title_font_size=12)
+                        
+                        # Grafico 2: Inicio y Cierre
+                        fig_horarios = go.Figure()
+                        fig_horarios.add_trace(go.Scatter(x=df_maq_trends['Fecha'], y=df_maq_trends['Hora Inicio'], mode='lines+markers', name='Inicio', line=dict(color='#2ECC71')))
+                        fig_horarios.add_trace(go.Scatter(x=df_maq_trends['Fecha'], y=df_maq_trends['Hora Cierre'], mode='lines+markers', name='Cierre', line=dict(color='#E74C3C')))
+                        fig_horarios.update_yaxes(tickmode='array', tickvals=list(range(0, 25, 4)), ticktext=[f"{i:02d}:00" for i in range(0, 25, 4)], range=[0, 24])
+                        fig_horarios.update_layout(title="Horarios de Turno", height=250, width=400, margin=dict(t=40, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', title_font_size=12, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_n:
+                            fig_neta.write_image(tmp_n.name, engine="kaleido")
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_h:
+                            fig_horarios.write_image(tmp_h.name, engine="kaleido")
+                        
+                        y_curr = pdf.get_y()
+                        pdf.image(tmp_n.name, x=10, y=y_curr, w=95)
+                        pdf.image(tmp_h.name, x=105, y=y_curr, w=95)
+                        os.remove(tmp_n.name); os.remove(tmp_h.name)
+                        
+                        pdf.set_y(y_curr + 65)
+                        pdf.ln(2)
 
             # LÓGICA TABLAS DIARIAS
             elif p_tipo == "Diario":
@@ -544,6 +546,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         pdf.cell(35, 7, "Maquina", 1, 0, 'C', True); pdf.cell(15, 7, "Turno", 1, 0, 'C', True)
                         pdf.cell(25, 7, "Hora Inicio", 1, 0, 'C', True); pdf.cell(25, 7, "Hora Cierre", 1, 0, 'C', True)
                         pdf.cell(45, 7, "Apertura Neta", 1, 0, 'C', True); pdf.cell(45, 7, "No Registrado", 1, 1, 'C', True)
+                        pdf.ln()
                         
                     dibujar_cabeza_hora()
                     setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
@@ -554,6 +557,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         pdf.cell(15, 6, clean_text(str(r['Turno'])), 1, 0, 'C')
                         pdf.cell(25, 6, clean_text(mins_to_time_str(r['Inicio'])), 1, 0, 'C'); pdf.cell(25, 6, clean_text(mins_to_time_str(r['Fin'])), 1, 0, 'C')
                         pdf.cell(45, 6, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C'); pdf.cell(45, 6, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
+                        pdf.ln()
                     pdf.ln(5)
             
             # LÓGICA TABLAS SEMANALES
