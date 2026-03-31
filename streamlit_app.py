@@ -450,15 +450,71 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 10, clean_text(f"SECCIÓN GRUPO: {g}"), ln=True, align='L', border='B')
         pdf.ln(5)
 
+        # -----------------------------------------------------------------------------------------------------
+        # PRE-CALCULO DE PESOS PARA OEE PONDERADO
+        # -----------------------------------------------------------------------------------------------------
+        df_pesos = pd.DataFrame()
+        if not df_pdf_g.empty and 'Inicio_Str' in df_pdf_g.columns:
+            tiempos_peso = []
+            for (maq, fecha), grp in df_pdf_g.groupby(['Máquina', 'Fecha_Filtro']):
+                intervals = []
+                for _, r in grp.iterrows():
+                    ini = parse_time_to_mins(r['Inicio_Str'])
+                    fin = parse_time_to_mins(r['Fin_Str'])
+                    if ini is not None and fin is not None:
+                        if fin < ini and (ini - fin) > 720: fin += 1440
+                        intervals.append([ini, fin])
+                if not intervals: continue
+                intervals.sort(key=lambda x: x[0])
+                merged = [intervals[0]]
+                for current in intervals[1:]:
+                    last = merged[-1]
+                    if current[0] <= last[1]: last[1] = max(last[1], current[1])
+                    else: merged.append(current)
+                
+                total_active = sum(iv[1] - iv[0] for iv in merged)
+                min_i, max_f = merged[0][0], merged[-1][1]
+                tiempo_bruto = max_f - min_i
+                tiempos_peso.append({
+                    'Máquina': maq, 
+                    'Apertura_Bruta': tiempo_bruto,
+                    'Apertura_Neta': total_active
+                })
+            if tiempos_peso:
+                df_pesos = pd.DataFrame(tiempos_peso).groupby('Máquina').sum().reset_index()
+
+        # -----------------------------------------------------------------------------------------------------
+        # 1. RESUMEN OEE PONDERADO
+        # -----------------------------------------------------------------------------------------------------
         m_g = {'OEE': 0, 'DISPONIBILIDAD': 0, 'PERFORMANCE': 0, 'CALIDAD': 0}
         if not oee_target_df.empty:
-            df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)]
+            df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)].copy()
             if not df_g_oee.empty:
                 numeric_cols = ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']
+                
                 if p_tipo == "Semanal":
-                    m_g = (df_g_oee.groupby('Máquina')[numeric_cols].sum() / 7).mean().to_dict()
+                    df_g_oee_agrup = df_g_oee.groupby('Máquina')[numeric_cols].sum() / 7
+                    df_g_oee_agrup = df_g_oee_agrup.reset_index()
                 else:
-                    m_g = df_g_oee[numeric_cols].mean().to_dict()
+                    df_g_oee_agrup = df_g_oee.groupby('Máquina')[numeric_cols].mean().reset_index()
+
+                if not df_pesos.empty:
+                    df_merged = pd.merge(df_g_oee_agrup, df_pesos, on='Máquina', how='left').fillna(0)
+                    df_merged['Apertura_Bruta'] = df_merged['Apertura_Bruta'].replace(0, 1) 
+                    df_merged['Apertura_Neta'] = df_merged['Apertura_Neta'].replace(0, 1)
+
+                    sum_bruta = df_merged['Apertura_Bruta'].sum()
+                    sum_neta = df_merged['Apertura_Neta'].sum()
+
+                    m_g['DISPONIBILIDAD'] = (df_merged['DISPONIBILIDAD'] * df_merged['Apertura_Bruta']).sum() / sum_bruta
+                    m_g['PERFORMANCE'] = (df_merged['PERFORMANCE'] * df_merged['Apertura_Neta']).sum() / sum_neta
+                    m_g['CALIDAD'] = (df_merged['CALIDAD'] * df_merged['Apertura_Neta']).sum() / sum_neta
+                else:
+                    m_g['DISPONIBILIDAD'] = df_g_oee_agrup['DISPONIBILIDAD'].mean()
+                    m_g['PERFORMANCE'] = df_g_oee_agrup['PERFORMANCE'].mean()
+                    m_g['CALIDAD'] = df_g_oee_agrup['CALIDAD'].mean()
+
+                m_g['OEE'] = m_g['DISPONIBILIDAD'] * m_g['PERFORMANCE'] * m_g['CALIDAD']
 
         print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
@@ -472,9 +528,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     else:
                         dict_maq = df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].mean().to_dict()
                     
+                    dict_maq['OEE'] = dict_maq['DISPONIBILIDAD'] * dict_maq['PERFORMANCE'] * dict_maq['CALIDAD']
                     print_pdf_metric_row(pdf, f"    > {maq}", dict_maq)
         pdf.ln(3)
 
+        # =========================================================================
+        # SECCIÓN 2: Horarios y Tiempo de Apertura (Lógica Dinámica)
+        # =========================================================================
         check_space(pdf, 50)
         print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         
