@@ -253,7 +253,6 @@ def clean_text(text):
     return str(text).replace('•', '-').replace('➤', '>').encode('latin-1', 'replace').decode('latin-1')
 
 def check_space(pdf, required_height):
-    # Optimización: Se ajustó el límite de salto a 275 para aprovechar más la hoja
     if pdf.get_y() + required_height > 275 and pdf.get_y() > 40:
         pdf.add_page(); return True
     return False
@@ -350,7 +349,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     hex_theme = '#%02x%02x%02x' % theme_color; hex_comp = '#%02x%02x%02x' % comp_color  
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
 
-    # Corrección de Bug: Evita error Key_Error inicializando las DataFrames con sus columnas predefinidas
     df_pdf = pd.DataFrame(columns=['Máquina', 'Fábrica', 'Estado_Global', 'Tiempo (Min)'])
     if not df_pdf_raw.empty:
         df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
@@ -478,6 +476,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         pdf.cell(35, 7, "Maquina", 1, 0, 'C', True); pdf.cell(15, 7, "Turno", 1, 0, 'C', True)
                         pdf.cell(25, 7, "Hora Inicio", 1, 0, 'C', True); pdf.cell(25, 7, "Hora Cierre", 1, 0, 'C', True)
                         pdf.cell(45, 7, "Apertura Neta", 1, 0, 'C', True); pdf.cell(45, 7, "No Registrado", 1, 1, 'C', True)
+                        pdf.ln()
                     
                     dibujar_cabeza_hora()
                     setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
@@ -564,20 +563,54 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 
                 df_maq_fallas = df_maq[df_maq['Estado_Global'] == 'Falla/Gestión']
                 if not df_maq_fallas.empty:
-                    check_space(pdf, 60); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text("> Top 3 Fallas (por tiempo):"), ln=True)
-                    agg_f = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
-                    agg_f['Label'] = agg_f.apply(lambda r: f" {str(r['Detalle_Final'])[:45]} — {r['Tiempo (Min)']:.0f} min ({(r['Tiempo (Min)']/max(t_falla,1))*100:.1f}%)", axis=1)
-                    max_x_val = agg_f['Tiempo (Min)'].max() if not agg_f.empty else 1
-                    fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Detalle_Final', orientation='h', text='Label')
-                    fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'), cliponaxis=False)
-                    fig_top3.update_layout(height=140, width=700, margin=dict(t=5, b=5, l=10, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 2.5]), yaxis=dict(title='', autorange="reversed", showticklabels=False))
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
-                        fig_top3.write_image(tmp_chart.name, engine="kaleido")
-                        pdf.image(tmp_chart.name, w=150); os.remove(tmp_chart.name)
-                
-                dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
-                dibujar_tabla_eventos_detallada(df_maq[df_maq['Estado_Global'] == 'Parada Programada'], 'Detalle_Final', "Paradas Programadas", theme_color)
+                    if p_tipo == "Mensual":
+                        # GRÁFICO 1: Top 15 Fallas
+                        check_space(pdf, 100); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
+                        pdf.cell(0, 6, clean_text("> Top 15 Fallas (por tiempo):"), ln=True)
+                        
+                        agg_f15 = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(15)
+                        agg_f15 = agg_f15.sort_values('Tiempo (Min)', ascending=True) 
+                        agg_f15['Label'] = agg_f15.apply(lambda r: f" {str(r['Detalle_Final'])[:40]} — {r['Tiempo (Min)']:.0f}m", axis=1)
+                        
+                        max_x_val = agg_f15['Tiempo (Min)'].max() if not agg_f15.empty else 1
+                        fig_top15 = px.bar(agg_f15, x='Tiempo (Min)', y='Detalle_Final', orientation='h', text='Label')
+                        fig_top15.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=11, color='black'), cliponaxis=False)
+                        fig_top15.update_layout(height=max(200, len(agg_f15)*22), width=700, margin=dict(t=5, b=5, l=10, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 1.5]), yaxis=dict(title='', showticklabels=False))
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
+                            fig_top15.write_image(tmp_chart.name, engine="kaleido")
+                            pdf.image(tmp_chart.name, w=170); os.remove(tmp_chart.name)
+                        
+                        # GRÁFICO 2: Tendencia de Fallas
+                        check_space(pdf, 80); pdf.ln(5); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
+                        pdf.cell(0, 6, clean_text("> Tendencia Diaria de Fallas (Minutos):"), ln=True)
+                        
+                        trend_df = df_maq_fallas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
+                        trend_df['Fecha_Str'] = pd.to_datetime(trend_df['Fecha_Filtro']).dt.strftime('%d/%m')
+                        
+                        fig_trend = px.line(trend_df, x='Fecha_Str', y='Tiempo (Min)', markers=True)
+                        fig_trend.update_traces(line_color=hex_comp, marker=dict(size=8, color=hex_theme))
+                        fig_trend.update_layout(height=250, width=700, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos")
+                        
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend:
+                            fig_trend.write_image(tmp_trend.name, engine="kaleido")
+                            pdf.image(tmp_trend.name, w=170); os.remove(tmp_trend.name)
+                            
+                    else:
+                        check_space(pdf, 60); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
+                        pdf.cell(0, 6, clean_text("> Top 3 Fallas (por tiempo):"), ln=True)
+                        agg_f = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
+                        agg_f['Label'] = agg_f.apply(lambda r: f" {str(r['Detalle_Final'])[:45]} — {r['Tiempo (Min)']:.0f} min ({(r['Tiempo (Min)']/max(t_falla,1))*100:.1f}%)", axis=1)
+                        max_x_val = agg_f['Tiempo (Min)'].max() if not agg_f.empty else 1
+                        fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Detalle_Final', orientation='h', text='Label')
+                        fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'), cliponaxis=False)
+                        fig_top3.update_layout(height=140, width=700, margin=dict(t=5, b=5, l=10, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 2.5]), yaxis=dict(title='', autorange="reversed", showticklabels=False))
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
+                            fig_top3.write_image(tmp_chart.name, engine="kaleido")
+                            pdf.image(tmp_chart.name, w=150); os.remove(tmp_chart.name)
+                        
+                        dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
+                        dibujar_tabla_eventos_detallada(df_maq[df_maq['Estado_Global'] == 'Parada Programada'], 'Detalle_Final', "Paradas Programadas", theme_color)
         else:
             check_space(pdf, 30); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True); pdf.ln(5)
@@ -623,6 +656,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 9)
                 pdf.cell(40, 7, "Maquina", 1, 0, 'C', True); pdf.cell(60, 7, "Codigo", 1, 0, 'C', True)
                 pdf.cell(25, 7, "Buenas", 1, 0, 'C', True); pdf.cell(25, 7, "Retrab.", 1, 0, 'C', True); pdf.cell(30, 7, "Observ.", 1, 1, 'C', True)
+                pdf.ln()
             
             dibujar_cabeza_prod()
             setup_table_row(pdf); pdf.set_font("Arial", '', 9)
