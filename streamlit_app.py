@@ -85,15 +85,30 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         fin_str = fecha_fin.strftime('%Y-%m-%d')
 
         if tipo_periodo == "Mensual":
-            q_oee = f"SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, p.Performance as PERFORMANCE, p.Quality as CALIDAD FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Month = {mes} AND p.Year = {anio}"
-            q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code"
+            q_prod = f"""
+                SELECT c.Name as Máquina, pr.Code as Código, 
+                       SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                       AVG(p.CycleTime) as Tiempo_Ciclo, SUM(p.ProductiveTime) as Tiempo_Produccion
+                FROM PROD_M_01 p 
+                JOIN CELL c ON p.CellId = c.CellId 
+                JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                WHERE p.Month = {mes} AND p.Year = {anio} 
+                GROUP BY c.Name, pr.Code
+            """
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY op.Name, p.Factory"
         else:
-            q_oee = f"SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, p.Performance as PERFORMANCE, p.Quality as CALIDAD FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'"
-            q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code"
+            q_prod = f"""
+                SELECT c.Name as Máquina, pr.Code as Código, 
+                       SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                       AVG(p.CycleTime) as Tiempo_Ciclo, SUM(p.ProductiveTime) as Tiempo_Produccion
+                FROM PROD_D_01 p 
+                JOIN CELL c ON p.CellId = c.CellId 
+                JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' 
+                GROUP BY c.Name, pr.Code
+            """
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY op.Name, p.Factory"
 
-        df_oee_target = conn.query(q_oee)
         df_prod_target = conn.query(q_prod)
         df_op_target = conn.query(q_op)
 
@@ -154,10 +169,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 niveles = [str(row.get(col, '')).strip() for col in ['Nivel Evento 1', 'Nivel Evento 2', 'Nivel Evento 3', 'Nivel Evento 4']]
                 validos = [n for n in niveles if n.lower() not in ['none', 'nan', '', 'null']]
                 if not validos: return "Sin detalle en sistema"
-                
                 ultimo = validos[-1]
                 macro = row['Categoria_Macro']
-                
                 if row['Estado_Global'] == 'Falla/Gestión':
                     if macro.upper() not in ultimo.upper():
                         return f"[{macro}] {ultimo}"
@@ -165,11 +178,11 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
 
             df_raw['Detalle_Final'] = df_raw.apply(obtener_ultimo_nivel, axis=1)
 
-        return df_raw, df_oee_target, df_prod_target, df_op_target
+        return df_raw, df_prod_target, df_op_target
 
     except Exception as e:
         st.error(f"Error ejecutando consulta a base de datos wii_bi: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # ==========================================
 # 3. INTERFAZ: CONFIGURACIÓN PERIODO
@@ -218,7 +231,7 @@ with col_p2:
         pdf_label = f"{mes_sel} {pdf_anio}"
         file_label = f"{mes_sel}_{pdf_anio}"
 
-df_raw, pdf_df_oee_target, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
+df_raw, pdf_df_prod_target, pdf_df_op_target = fetch_data_from_db(
     pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio
 )
 
@@ -327,9 +340,71 @@ def print_pdf_metric_row(pdf, prefix, m):
     pdf.ln(7)
 
 # ==========================================
+# CÁLCULO DE OEE 100% EN PYTHON (REGLAS WIIDEM)
+# ==========================================
+def calcular_metricas_oee(maq_df_raw, maq_df_prod):
+    # 1. Calidad (Total Piezas Buenas / Total de Piezas Producidas)
+    buenas = maq_df_prod['Buenas'].sum() if not maq_df_prod.empty else 0
+    retrabajo = maq_df_prod['Retrabajo'].sum() if not maq_df_prod.empty else 0
+    observadas = maq_df_prod['Observadas'].sum() if not maq_df_prod.empty else 0
+    totales = buenas + retrabajo + observadas
+    calidad = buenas / totales if totales > 0 else 0
+    
+    # 2. Tiempos (desde EVENT_01)
+    t_total_eventos = 0
+    t_fallas_y_excesos = 0
+    
+    if not maq_df_raw.empty:
+        for _, r in maq_df_raw.iterrows():
+            t = r['Tiempo (Min)']
+            est = r['Estado_Global']
+            niv = str(r['Nivel Evento 1']).upper() + " " + str(r['Nivel Evento 2']).upper()
+            
+            t_total_eventos += t
+            
+            # Disponibilidad se afecta por Fallas y Excesos de Descansos
+            if est == 'Falla/Gestión':
+                t_fallas_y_excesos += t
+            elif est == 'Descanso':
+                if 'BAÑO' in niv or 'BANO' in niv:
+                    t_fallas_y_excesos += max(0, t - 1)
+                elif 'REFRIGERIO' in niv:
+                    t_fallas_y_excesos += max(0, t - 16)
+                    
+    # Disponibilidad = (El tiempo total de todos los eventos - el tiempo total de los eventos que afectan disponibilidad) / El tiempo total
+    disponibilidad = (t_total_eventos - t_fallas_y_excesos) / t_total_eventos if t_total_eventos > 0 else 0
+    
+    # 3. Performance (Total de Piezas Producidas / Producción Ideal)
+    tiempo_ideal = 0
+    if not maq_df_prod.empty:
+        maq_df_prod['Piezas_Totales'] = maq_df_prod['Buenas'] + maq_df_prod['Retrabajo'] + maq_df_prod['Observadas']
+        maq_df_prod['Tiempo_Ciclo'] = pd.to_numeric(maq_df_prod['Tiempo_Ciclo'], errors='coerce').fillna(0)
+        # Produccion ideal en unidades de tiempo (Sumatoria de Piezas * CycleTime)
+        tiempo_ideal = (maq_df_prod['Piezas_Totales'] * maq_df_prod['Tiempo_Ciclo']).sum()
+    
+    # Tiempo Operativo Neto (Tiempo de Producción real + el tiempo de excesos que debió ser productivo)
+    t_operativo = t_total_eventos - t_fallas_y_excesos
+    performance = tiempo_ideal / t_operativo if t_operativo > 0 else 0
+    
+    # 4. OEE Final
+    oee = disponibilidad * performance * calidad
+    
+    return {
+        'OEE': oee, 
+        'DISPONIBILIDAD': disponibilidad, 
+        'PERFORMANCE': performance, 
+        'CALIDAD': calidad, 
+        'T_Planificado': t_total_eventos, 
+        'T_Operativo': t_operativo, 
+        'T_Ideal': tiempo_ideal, 
+        'Buenas': buenas, 
+        'Totales': totales
+    }
+
+# ==========================================
 # 5. MOTOR GENERADOR DEL PDF
 # ==========================================
-def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, df_pdf_raw, p_tipo):
+def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo):
     if area.upper() == "ESTAMPADO":
         theme_color = (15, 76, 129) 
         comp_color = (52, 152, 219)  
@@ -358,11 +433,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_prod_pdf = prod_target_df.copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
-    if not oee_target_df.empty:
-        for c in ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']:
-            if c in oee_target_df.columns:
-                oee_target_df[c] = pd.to_numeric(oee_target_df[c], errors='coerce').fillna(0) / 100.0
-
     pdf = ReportePDF(area, label_reporte, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -383,7 +453,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 8, clean_text(f"> Reporte detallado de Grupo: {g}"), ln=True, link=links_grupos[g])
     pdf.ln(5)
     pdf.cell(0, 8, clean_text("> Performance General de Operarios"), ln=True, link=link_perfo)
-    pdf.cell(0, 8, clean_text("> Tiempos de Baño y Refrigerio (General)"), ln=True, link=link_tiempos)
+    pdf.cell(0, 8, clean_text("> Tablas de Tiempos Acumulados de Baño y Refrigerio"), ln=True, link=link_tiempos)
 
     if df_pdf.empty:
         pdf.add_page()
@@ -392,7 +462,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
 
-    # FUNCIÓN PARA DIBUJAR TABLAS
+    # FUNCIÓN PARA DIBUJAR TABLAS DETALLE
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
         if not df_subset.empty:
             check_space(pdf, 30)
@@ -451,96 +521,48 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.ln(5)
 
         # -----------------------------------------------------------------------------------------------------
-        # PRE-CALCULO DE PESOS PARA OEE PONDERADO
+        # 1. RESUMEN OEE CALCULADO DESDE CERO
         # -----------------------------------------------------------------------------------------------------
-        df_pesos = pd.DataFrame()
-        if not df_pdf_g.empty and 'Inicio_Str' in df_pdf_g.columns:
-            tiempos_peso = []
-            for (maq, fecha), grp in df_pdf_g.groupby(['Máquina', 'Fecha_Filtro']):
-                intervals = []
-                for _, r in grp.iterrows():
-                    ini = parse_time_to_mins(r['Inicio_Str'])
-                    fin = parse_time_to_mins(r['Fin_Str'])
-                    if ini is not None and fin is not None:
-                        if fin < ini and (ini - fin) > 720: fin += 1440
-                        intervals.append([ini, fin])
-                if not intervals: continue
-                intervals.sort(key=lambda x: x[0])
-                merged = [intervals[0]]
-                for current in intervals[1:]:
-                    last = merged[-1]
-                    if current[0] <= last[1]: last[1] = max(last[1], current[1])
-                    else: merged.append(current)
-                
-                total_active = sum(iv[1] - iv[0] for iv in merged)
-                min_i, max_f = merged[0][0], merged[-1][1]
-                tiempo_bruto = max_f - min_i
-                tiempos_peso.append({
-                    'Máquina': maq, 
-                    'Apertura_Bruta': tiempo_bruto,
-                    'Apertura_Neta': total_active
-                })
-            if tiempos_peso:
-                df_pesos = pd.DataFrame(tiempos_peso).groupby('Máquina').sum().reset_index()
-
-        # -----------------------------------------------------------------------------------------------------
-        # 1. RESUMEN OEE PONDERADO
-        # -----------------------------------------------------------------------------------------------------
-        m_g = {'OEE': 0, 'DISPONIBILIDAD': 0, 'PERFORMANCE': 0, 'CALIDAD': 0}
-        if not oee_target_df.empty:
-            df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)].copy()
-            if not df_g_oee.empty:
-                numeric_cols = ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']
-                
-                if p_tipo == "Semanal":
-                    df_g_oee_agrup = df_g_oee.groupby('Máquina')[numeric_cols].sum() / 7
-                    df_g_oee_agrup = df_g_oee_agrup.reset_index()
-                else:
-                    df_g_oee_agrup = df_g_oee.groupby('Máquina')[numeric_cols].mean().reset_index()
-
-                if not df_pesos.empty:
-                    df_merged = pd.merge(df_g_oee_agrup, df_pesos, on='Máquina', how='left').fillna(0)
-                    df_merged['Apertura_Bruta'] = df_merged['Apertura_Bruta'].replace(0, 1) 
-                    df_merged['Apertura_Neta'] = df_merged['Apertura_Neta'].replace(0, 1)
-
-                    sum_bruta = df_merged['Apertura_Bruta'].sum()
-                    sum_neta = df_merged['Apertura_Neta'].sum()
-
-                    m_g['DISPONIBILIDAD'] = (df_merged['DISPONIBILIDAD'] * df_merged['Apertura_Bruta']).sum() / sum_bruta
-                    m_g['PERFORMANCE'] = (df_merged['PERFORMANCE'] * df_merged['Apertura_Neta']).sum() / sum_neta
-                    m_g['CALIDAD'] = (df_merged['CALIDAD'] * df_merged['Apertura_Neta']).sum() / sum_neta
-                else:
-                    m_g['DISPONIBILIDAD'] = df_g_oee_agrup['DISPONIBILIDAD'].mean()
-                    m_g['PERFORMANCE'] = df_g_oee_agrup['PERFORMANCE'].mean()
-                    m_g['CALIDAD'] = df_g_oee_agrup['CALIDAD'].mean()
-
-                m_g['OEE'] = m_g['DISPONIBILIDAD'] * m_g['PERFORMANCE'] * m_g['CALIDAD']
-
         print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
-        print_pdf_metric_row(pdf, f"Total {g}", m_g)
+        
+        g_plan = 0; g_op = 0; g_ideal = 0; g_buenas = 0; g_totales = 0
+        maquinas_metricas = {}
         
         for maq in maq_del_grupo:
-            if not oee_target_df.empty:
-                df_m_oee = oee_target_df[oee_target_df['Máquina'] == maq]
-                if not df_m_oee.empty:
-                    if p_tipo == "Semanal":
-                        dict_maq = (df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].sum() / 7).to_dict()
-                    else:
-                        dict_maq = df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].mean().to_dict()
-                    
-                    dict_maq['OEE'] = dict_maq['DISPONIBILIDAD'] * dict_maq['PERFORMANCE'] * dict_maq['CALIDAD']
-                    print_pdf_metric_row(pdf, f"    > {maq}", dict_maq)
+            maq_df_raw = df_pdf_g[df_pdf_g['Máquina'] == maq]
+            maq_df_prod = df_prod_pdf[(df_prod_pdf['Grupo_Máquina'] == g) & (df_prod_pdf['Máquina'] == maq)]
+            
+            if not maq_df_raw.empty or not maq_df_prod.empty:
+                metrics = calcular_metricas_oee(maq_df_raw, maq_df_prod)
+                maquinas_metricas[maq] = metrics
+                
+                g_plan += metrics['T_Planificado']
+                g_op += metrics['T_Operativo']
+                g_ideal += metrics['T_Ideal']
+                g_buenas += metrics['Buenas']
+                g_totales += metrics['Totales']
+                
+        # Calculamos OEE Global del Grupo Ponderado (Suma de todas las máquinas)
+        g_disp = g_op / g_plan if g_plan > 0 else 0
+        g_perf = g_ideal / g_op if g_op > 0 else 0
+        g_cal = g_buenas / g_totales if g_totales > 0 else 0
+        g_oee = g_disp * g_perf * g_cal
+        
+        m_g = {'OEE': g_oee, 'DISPONIBILIDAD': g_disp, 'PERFORMANCE': g_perf, 'CALIDAD': g_cal}
+        print_pdf_metric_row(pdf, f"Total {g}", m_g)
+        
+        for maq, metrics in maquinas_metricas.items():
+            print_pdf_metric_row(pdf, f"    > {maq}", metrics)
         pdf.ln(3)
 
         # =========================================================================
-        # SECCIÓN 2: Horarios y Tiempo de Apertura (Lógica Dinámica)
+        # SECCIÓN 2: Horarios y Tiempo de Apertura
         # =========================================================================
         check_space(pdf, 50)
         print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         
         df_pdf_g_horarios = df_pdf_g.copy()
         if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
-            
             if p_tipo == "Diario":
                 tiempos_list = []
                 for (maq, turno), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno']):
@@ -645,11 +667,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                             pdf.cell(30, 6, str(row.get(i, "-")), 1, 0, 'C')
                         pdf.ln()
                     pdf.ln(5)
-                else:
-                    pdf.set_font("Arial", 'I', 9)
-                    pdf.cell(0, 6, clean_text("No hay horarios registrados de Lunes a Viernes."), ln=True)
+        else:
+            pdf.set_font("Arial", 'I', 9)
+            pdf.cell(0, 6, clean_text("No hay horarios registrados de Lunes a Viernes."), ln=True)
 
-        # Pre-calcular si hay máquinas con tiempos para evitar espacios en blanco
+        # -----------------------------------------------------------------------------------------------------
+        # SECCIÓN 3: Desglose por Máquina 
+        # -----------------------------------------------------------------------------------------------------
         maquinas_con_tiempo = []
         if not df_pdf_g.empty:
             for maq in sorted(df_pdf_g['Máquina'].unique()):
@@ -724,6 +748,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True)
             pdf.ln(5)
 
+        # -----------------------------------------------------------------------------------------------------
+        # SECCIÓN 4: Resumen Visual Global
+        # -----------------------------------------------------------------------------------------------------
         resumen_global = df_pdf_g.groupby('Estado_Global')['Tiempo (Min)'].sum().reset_index() if not df_pdf_g.empty else pd.DataFrame()
         total_global = resumen_global['Tiempo (Min)'].sum() if not resumen_global.empty else 0
 
@@ -762,7 +789,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.cell(0, 6, clean_text("No hay tiempos suficientes para generar los gráficos visuales."), ln=True)
             pdf.ln(5)
 
-        # Produccion Grupo
+        # -----------------------------------------------------------------------------------------------------
+        # SECCIÓN 5: Producción por Máquina
+        # -----------------------------------------------------------------------------------------------------
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g] if not df_prod_pdf.empty else pd.DataFrame()
         if not df_prod_pdf_g.empty:
             check_space(pdf, 110); print_section_title(pdf, "5. Produccion por Maquina", theme_color)
@@ -803,7 +832,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.cell(0, 6, clean_text("No hay producción registrada para las máquinas de este grupo en el período."), ln=True)
             pdf.ln(5)
 
+    # =========================================================================
     # SECCIÓN FINAL OPERARIOS (Flujo Continuo)
+    # =========================================================================
     check_space(pdf, 80)
     if pdf.get_y() > 30:
         pdf.ln(10)
@@ -814,7 +845,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.set_line_width(0.2)
         pdf.ln(10)
 
-    pdf.set_link(link_perfo); pdf.set_font("Times", 'B', 16); pdf.set_text_color(*theme_color); pdf.cell(0, 10, clean_text(f"SECCIÓN FINAL: PERFORMANCE Y TIEMPOS"), ln=True, align='L', border='B'); pdf.ln(5)
+    pdf.set_link(link_perfo); pdf.set_font("Times", 'B', 16); pdf.set_text_color(*theme_color)
+    pdf.cell(0, 10, clean_text(f"SECCIÓN FINAL: PERFORMANCE Y TIEMPOS"), ln=True, align='L', border='B'); pdf.ln(5)
     print_section_title(pdf, "Performance de Operarios General", theme_color)
     
     if not op_target_df.empty:
@@ -855,8 +887,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.set_font("Arial", 'I', 10)
             pdf.cell(0, 10, clean_text("No hay datos de performance registrados para esta área en este período."), ln=True)
 
-    # Tablas de tiempos de Baño y Refrigerio
-    def agregar_tabla_tiempos(titulo, db_col, palabras_clave):
+    # Tablas de tiempos de Baño y Refrigerio (Mostrando solo tiempo legal visualmente)
+    def agregar_tabla_tiempos(titulo, palabras_clave):
         check_space(pdf, 30); print_section_title(pdf, titulo, theme_color)
         resumen_eventos = {}
         if not df_pdf.empty:
@@ -893,8 +925,8 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             pdf.cell(0, 10, clean_text("No hay registros de tiempo acumulado para este ítem en el período."), ln=True)
 
     pdf.set_link(link_tiempos)
-    agregar_tabla_tiempos("Tiempo de Baño Acumulado", "BathTime", ["BAÑO", "BANO"])
-    agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado", "BreakTime", ["REFRIGERIO"])
+    agregar_tabla_tiempos("Tiempo de Baño Acumulado", ["BAÑO", "BANO"])
+    agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado", ["REFRIGERIO"])
 
     return pdf.output(dest='S').encode('latin-1')
 
@@ -908,7 +940,7 @@ with col_p3:
         if st.button("Preparar Reporte ESTAMPADO", use_container_width=True):
             with st.spinner("Generando PDF Estampado..."):
                 try:
-                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
+                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
                     st.download_button("Descargar PDF Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -917,7 +949,7 @@ with col_p3:
         if st.button("Preparar Reporte SOLDADURA", use_container_width=True):
             with st.spinner("Generando PDF Soldadura..."):
                 try:
-                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_oee_target, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
+                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
                     st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
