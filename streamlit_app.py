@@ -288,7 +288,7 @@ def print_pdf_metric_row(pdf, prefix, m):
     pdf.set_text_color(0, 0, 0); pdf.ln(7)
 
 # ==========================================
-# CÁLCULO DE OEE 100% EN PYTHON (EXCLUYE PROYECTOS DE DISPO)
+# CÁLCULO DE OEE 100% EN PYTHON 
 # ==========================================
 def calcular_metricas_oee(maq_df_raw, maq_df_prod):
     buenas = maq_df_prod['Buenas'].sum() if not maq_df_prod.empty else 0
@@ -443,7 +443,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             print_pdf_metric_row(pdf, f"    > {maq}", metrics)
         pdf.ln(3)
 
-        # 2. HORARIOS
+        # 2. HORARIOS (TABLAS ORIGINALES SOLICITADAS)
         check_space(pdf, 50); print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         df_pdf_g_horarios = df_pdf_g.copy()
         if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
@@ -487,6 +487,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         pdf.cell(15, 6, clean_text(str(r['Turno'])), 1, 0, 'C')
                         pdf.cell(25, 6, clean_text(mins_to_time_str(r['Inicio'])), 1, 0, 'C'); pdf.cell(25, 6, clean_text(mins_to_time_str(r['Fin'])), 1, 0, 'C')
                         pdf.cell(45, 6, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C'); pdf.cell(45, 6, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
+                        pdf.ln()
                     pdf.ln(5)
             else:
                 df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
@@ -541,7 +542,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 t_desc = df_maq[df_maq['Estado_Global'] == 'Descanso']['Tiempo (Min)'].sum()
                 
                 if impresas > 0:
-                    salto_ejecutado = check_space(pdf, 45) # Pedimos un espacio razonable solo para el título y la tabla principal
+                    salto_ejecutado = check_space(pdf, 45) 
                     if not salto_ejecutado:
                         pdf.ln(6); pdf.set_draw_color(200, 200, 200); pdf.set_line_width(0.8)
                         pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + 190, pdf.get_y())
@@ -564,7 +565,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 df_maq_fallas = df_maq[df_maq['Estado_Global'] == 'Falla/Gestión']
                 if not df_maq_fallas.empty:
                     if p_tipo == "Mensual":
-                        # GRÁFICO 1: Top 15 Fallas
                         check_space(pdf, 100); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
                         pdf.cell(0, 6, clean_text("> Top 15 Fallas (por tiempo):"), ln=True)
                         
@@ -581,7 +581,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             fig_top15.write_image(tmp_chart.name, engine="kaleido")
                             pdf.image(tmp_chart.name, w=170); os.remove(tmp_chart.name)
                         
-                        # GRÁFICO 2: Tendencia de Fallas
                         check_space(pdf, 80); pdf.ln(5); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
                         pdf.cell(0, 6, clean_text("> Tendencia Diaria de Fallas (Minutos):"), ln=True)
                         
@@ -615,7 +614,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             check_space(pdf, 30); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True); pdf.ln(5)
 
-        # 4. RESUMEN VISUAL
+        # 4. RESUMEN VISUAL (Ajuste de márgenes para no cortar texto inferior)
         resumen_global = df_pdf_g.groupby('Estado_Global')['Tiempo (Min)'].sum().reset_index() if not df_pdf_g.empty else pd.DataFrame()
         total_global = resumen_global['Tiempo (Min)'].sum() if not resumen_global.empty else 0
 
@@ -623,18 +622,19 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             check_space(pdf, 90); print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color); y_base = pdf.get_y()
             fig_g = px.pie(resumen_global, values='Tiempo (Min)', names='Estado_Global', hole=0.4, title="Global (Hs)", color_discrete_sequence=pie_colors)
             fig_g.update_traces(textinfo='percent+label', textposition='outside', textfont_size=11)
-            fig_g.update_layout(width=380, height=280, margin=dict(t=30, b=10, l=10, r=10), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
+            # Aumento de margin b=50 y width para dar respiro a las etiquetas inferiores
+            fig_g.update_layout(width=420, height=300, margin=dict(t=40, b=50, l=40, r=40), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp1:
-                fig_g.write_image(tmp1.name, engine="kaleido"); pdf.image(tmp1.name, x=10, y=y_base, w=95); os.remove(tmp1.name)
+                fig_g.write_image(tmp1.name, engine="kaleido"); pdf.image(tmp1.name, x=5, y=y_base, w=100); os.remove(tmp1.name)
 
             df_fallas_grupo = df_pdf_g[df_pdf_g['Estado_Global'] == 'Falla/Gestión'].copy()
             if not df_fallas_grupo.empty and df_fallas_grupo['Tiempo (Min)'].sum() > 0:
                 resumen_fallas = df_fallas_grupo.groupby('Categoria_Macro')['Tiempo (Min)'].sum().reset_index()
                 fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Categoria_Macro', hole=0.4, title="Fallas por Área (Hs)", color_discrete_sequence=pie_colors)
                 fig_p.update_traces(textinfo='percent+label', textposition='outside', textfont_size=11)
-                fig_p.update_layout(width=380, height=280, margin=dict(t=30, b=10, l=10, r=10), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
+                fig_p.update_layout(width=420, height=300, margin=dict(t=40, b=50, l=40, r=40), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp2:
-                    fig_p.write_image(tmp2.name, engine="kaleido"); pdf.image(tmp2.name, x=105, y=y_base, w=95); os.remove(tmp2.name)
+                    fig_p.write_image(tmp2.name, engine="kaleido"); pdf.image(tmp2.name, x=105, y=y_base, w=100); os.remove(tmp2.name)
             pdf.set_y(y_base + 85); pdf.ln(5)
         else:
             check_space(pdf, 30); print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color)
