@@ -358,6 +358,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_prod_pdf = prod_target_df.copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
+    # CORRECCIÓN DE OEE: Cargar base
     if not oee_target_df.empty:
         for c in ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']:
             if c in oee_target_df.columns:
@@ -450,12 +451,18 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 10, clean_text(f"SECCIÓN GRUPO: {g}"), ln=True, align='L', border='B')
         pdf.ln(5)
 
+        # ----------------------------------------------------
+        # CORRECCIÓN DE CÁLCULO OEE: OEE = Disp * Perf * Cal
+        # ----------------------------------------------------
         m_g = {'OEE': 0, 'DISPONIBILIDAD': 0, 'PERFORMANCE': 0, 'CALIDAD': 0}
         if not oee_target_df.empty:
             df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)]
             if not df_g_oee.empty:
-                numeric_cols = ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']
-                m_g = df_g_oee[numeric_cols].mean().to_dict()
+                m_g['DISPONIBILIDAD'] = df_g_oee['DISPONIBILIDAD'].mean()
+                m_g['PERFORMANCE'] = df_g_oee['PERFORMANCE'].mean()
+                m_g['CALIDAD'] = df_g_oee['CALIDAD'].mean()
+                # El OEE se calcula multiplicando para reflejar el dashboard diario
+                m_g['OEE'] = m_g['DISPONIBILIDAD'] * m_g['PERFORMANCE'] * m_g['CALIDAD']
 
         print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
@@ -464,7 +471,15 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             if not oee_target_df.empty:
                 df_m_oee = oee_target_df[oee_target_df['Máquina'] == maq]
                 if not df_m_oee.empty:
-                    print_pdf_metric_row(pdf, f"    > {maq}", df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].mean().to_dict())
+                    dict_maq = {
+                        'DISPONIBILIDAD': df_m_oee['DISPONIBILIDAD'].mean(),
+                        'PERFORMANCE': df_m_oee['PERFORMANCE'].mean(),
+                        'CALIDAD': df_m_oee['CALIDAD'].mean()
+                    }
+                    # OEE por máquina = Disp * Perf * Cal
+                    dict_maq['OEE'] = dict_maq['DISPONIBILIDAD'] * dict_maq['PERFORMANCE'] * dict_maq['CALIDAD']
+                    
+                    print_pdf_metric_row(pdf, f"    > {maq}", dict_maq)
         pdf.ln(3)
 
         # =========================================================================
@@ -477,7 +492,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
             
             if p_tipo == "Diario":
-                # LÓGICA PARA REPORTE DIARIO
                 tiempos_list = []
                 for (maq, turno), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno']):
                     intervals = []
@@ -537,13 +551,12 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     pdf.ln(5)
 
             else:
-                # LÓGICA PARA REPORTE SEMANAL/MENSUAL
                 df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
                 df_pdf_g_horarios['Dia_Semana'] = df_pdf_g_horarios['Fecha_DT'].dt.dayofweek
                 
                 horarios_list = []
                 for (maq, turno, dia), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno', 'Dia_Semana']):
-                    if dia > 4: continue # Solo consideramos de Lunes a Viernes
+                    if dia > 4: continue 
                     
                     ini = grp['Inicio_Str'].apply(parse_time_to_mins).min()
                     fin = grp['Fin_Str'].apply(parse_time_to_mins).max()
