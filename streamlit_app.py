@@ -382,7 +382,7 @@ def calcular_metricas_oee(maq_df_raw, maq_df_prod):
         # Produccion ideal en unidades de tiempo (Sumatoria de Piezas * CycleTime)
         tiempo_ideal = (maq_df_prod['Piezas_Totales'] * maq_df_prod['Tiempo_Ciclo']).sum()
     
-    # Tiempo Operativo Neto (Tiempo de Producción real + el tiempo de excesos que debió ser productivo)
+    # Tiempo Operativo Neto (Tiempo de Producción real restando los excesos que debieron ser productivos)
     t_operativo = t_total_eventos - t_fallas_y_excesos
     performance = tiempo_ideal / t_operativo if t_operativo > 0 else 0
     
@@ -462,7 +462,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
 
-    # FUNCIÓN PARA DIBUJAR TABLAS DETALLE
+    # FUNCIÓN PARA DIBUJAR TABLAS DETALLE EVENTOS
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
         if not df_subset.empty:
             check_space(pdf, 30)
@@ -521,7 +521,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.ln(5)
 
         # -----------------------------------------------------------------------------------------------------
-        # 1. RESUMEN OEE CALCULADO DESDE CERO
+        # 1. RESUMEN OEE CALCULADO DESDE CERO EN PYTHON
         # -----------------------------------------------------------------------------------------------------
         print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         
@@ -542,7 +542,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 g_buenas += metrics['Buenas']
                 g_totales += metrics['Totales']
                 
-        # Calculamos OEE Global del Grupo Ponderado (Suma de todas las máquinas)
+        # Calculamos OEE Global del Grupo Ponderado (Suma total)
         g_disp = g_op / g_plan if g_plan > 0 else 0
         g_perf = g_ideal / g_op if g_op > 0 else 0
         g_cal = g_buenas / g_totales if g_totales > 0 else 0
@@ -887,7 +887,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             pdf.set_font("Arial", 'I', 10)
             pdf.cell(0, 10, clean_text("No hay datos de performance registrados para esta área en este período."), ln=True)
 
-    # Tablas de tiempos de Baño y Refrigerio (Mostrando solo tiempo legal visualmente)
+    # Tablas de tiempos de Baño y Refrigerio (Mostrando solo tiempo general)
     def agregar_tabla_tiempos(titulo, palabras_clave):
         check_space(pdf, 30); print_section_title(pdf, titulo, theme_color)
         resumen_eventos = {}
@@ -906,13 +906,13 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
 
         if resumen_eventos:
             df_res = pd.DataFrame([{'Operador': k, 'Minutos': v['tiempo'], 'Cantidad': v['cantidad']} for k, v in resumen_eventos.items()]).sort_values('Minutos', ascending=False)
-            setup_table_header(pdf, theme_color); pdf.cell(80, 7, "Operador", 1, 0, 'C', True); pdf.cell(55, 7, "Total Min", 1, 0, 'C', True); pdf.cell(55, 7, "Cant.", 1, 1, 'C', True)
+            setup_table_header(pdf, theme_color); pdf.cell(80, 7, "Operador", 1, 0, 'C', True); pdf.cell(55, 7, "Total Min", 1, 0, 'C', True); pdf.cell(55, 7, "Cant. Veces", 1, 1, 'C', True)
             pdf.ln()
             setup_table_row(pdf); pdf.set_font("Arial", '', 9)
             for _, r in df_res.iterrows():
                 if pdf.get_y() > 260: 
                     pdf.add_page()
-                    setup_table_header(pdf, theme_color); pdf.cell(80, 7, "Operador", 1, 0, 'C', True); pdf.cell(55, 7, "Total Min", 1, 0, 'C', True); pdf.cell(55, 7, "Cant.", 1, 1, 'C', True)
+                    setup_table_header(pdf, theme_color); pdf.cell(80, 7, "Operador", 1, 0, 'C', True); pdf.cell(55, 7, "Total Min", 1, 0, 'C', True); pdf.cell(55, 7, "Cant. Veces", 1, 1, 'C', True)
                     pdf.ln()
                     setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 pdf.cell(80, 7, " " + clean_text(r['Operador'])[:35], 'B')
@@ -950,6 +950,4 @@ with col_p3:
             with st.spinner("Generando PDF Soldadura..."):
                 try:
                     pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
-                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error generando PDF: {e}")
+                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=
