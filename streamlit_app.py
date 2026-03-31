@@ -12,7 +12,6 @@ from datetime import timedelta
 # 0. DICCIONARIO DE MÁQUINAS Y GRUPOS FUMISCOR
 # ==========================================
 MAQUINAS_MAP = {
-    # === ESTAMPADO ===
     "P-023": "PRENSAS PROGRESIVAS", "P-024": "PRENSAS PROGRESIVAS", "P-025": "PRENSAS PROGRESIVAS",
     "P-026": "PRENSAS PROGRESIVAS GRANDES", "P-027": "PRENSAS PROGRESIVAS GRANDES",
     "BAL-002": "BALANCIN", "BAL-003": "BALANCIN", "BAL-005": "BALANCIN", "BAL-006": "BALANCIN",
@@ -20,12 +19,9 @@ MAQUINAS_MAP = {
     "P-011": "HIDRAULICAS", "P-016": "HIDRAULICAS", "P-017": "HIDRAULICAS", "P-018": "HIDRAULICAS",
     "P-015": "MECANICAS", "P-019": "MECANICAS", "P-020": "MECANICAS", "P-021": "MECANICAS", "P-022": "MECANICAS",
     "GOF01": "Gofradora",
-    # --- PREVISIÓN FUTURAS ESTAMPADO ---
     "P-028": "PRENSAS PROGRESIVAS GRANDES", "P-029": "PRENSAS PROGRESIVAS GRANDES", "P-030": "PRENSAS PROGRESIVAS GRANDES",
     "BAL-011": "BALANCIN", "BAL-012": "BALANCIN", "BAL-013": "BALANCIN", "BAL-014": "BALANCIN", "BAL-015": "BALANCIN",
     "P-012": "HIDRAULICAS", "P-013": "HIDRAULICAS", "P-014": "HIDRAULICAS",
-
-    # === SOLDADURA ===
     "SOP-003": "PRP", "SOP-005": "PRP", "SOP-008": "PRP", "SOP-009": "PRP", "SOP-010": "PRP",
     "SOP-017": "PRP", "SOP-018": "PRP", "SOP-019": "PRP", "SOP-020": "PRP", "SOP-022": "PRP",
     "SOP-023": "PRP", "SOP-024": "PRP", "SOP-025": "PRP",
@@ -39,12 +35,7 @@ MAQUINAS_MAP = {
     "Celda 05 Fumis": "CELDA SOLDADURA RENAULT", "Celda 06 Fumis": "CELDA SOLDADURA RENAULT",
     "Celda 07 Fumis": "CELDA SOLDADURA RENAULT", "Celda 08 Fumis": "CELDA SOLDADURA RENAULT",
     "Celda 09 Fumis": "CELDA SOLDADURA RENAULT", "Celda 10 Fumis": "CELDA SOLDADURA RENAULT",
-    "Celda 11 Fumis": "CELDA SOLDADURA RENAULT",
-    # --- PREVISIÓN FUTURAS SOLDADURA ---
-    "Celda 12 Fumis": "CELDA SOLDADURA RENAULT", "Celda 13 Fumis": "CELDA SOLDADURA RENAULT", 
-    "Celda 14 Fumis": "CELDA SOLDADURA RENAULT", "Celda 15 Fumis": "CELDA SOLDADURA RENAULT",
-    "SOP-026": "PRP", "SOP-027": "PRP", "SOP-028": "PRP", "SOP-029": "PRP", "SOP-030": "PRP",
-    "DOB-007": "DOBLADORA", "DOB-008": "DOBLADORA", "DOB-009": "DOBLADORA", "DOB-010": "DOBLADORA"
+    "Celda 11 Fumis": "CELDA SOLDADURA RENAULT"
 }
 
 GRUPOS_ESTAMPADO = ['PRENSAS PROGRESIVAS', 'PRENSAS PROGRESIVAS GRANDES', 'BALANCIN', 'HIDRAULICAS', 'MECANICAS', 'Gofradora']
@@ -89,7 +80,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code"
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY op.Name, p.Factory"
         else:
-            q_oee = f"SELECT c.Name as Máquina, AVG(p.Oee) as OEE, AVG(p.Availability) as DISPONIBILIDAD, AVG(p.Performance) as PERFORMANCE, AVG(p.Quality) as CALIDAD FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name"
+            # CORRECCIÓN OEE: No agrupamos por máquina aquí, traemos los datos diarios crudos para filtrar ceros en Python.
+            q_oee = f"SELECT c.Name as Máquina, p.Oee as OEE, p.Availability as DISPONIBILIDAD, p.Performance as PERFORMANCE, p.Quality as CALIDAD FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'"
             q_prod = f"SELECT c.Name as Máquina, pr.Code as Código, SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code"
             q_op = f"SELECT op.Name as Operador, p.Factory as Fábrica, AVG(p.Performance) as PERFORMANCE, SUM(p.BathTime) as BathTime, SUM(p.BreakTime) as BreakTime, SUM(p.FeedingTime) as FeedingTime FROM OPER_D_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY op.Name, p.Factory"
 
@@ -358,11 +350,15 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_prod_pdf = prod_target_df.copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
-    # Limpieza de métricas OEE para evitar errores de tipo
+    # CORRECCIÓN OEE: Aseguramos limpieza y eliminamos días sin producción (OEE=0) que bajan artificialmente el promedio general
     if not oee_target_df.empty:
         for c in ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']:
             if c in oee_target_df.columns:
-                oee_target_df[c] = pd.to_numeric(oee_target_df[c], errors='coerce').fillna(0) / 100.0
+                oee_target_df[c] = pd.to_numeric(oee_target_df[c], errors='coerce').fillna(0)
+                if oee_target_df[c].max() > 1.1:
+                    oee_target_df[c] = oee_target_df[c] / 100.0
+        # Filtramos los 0% causados por días feriados / máquinas apagadas
+        oee_target_df = oee_target_df[oee_target_df['OEE'] > 0]
 
     pdf = ReportePDF(area, label_reporte, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -455,7 +451,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         if not oee_target_df.empty:
             df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)]
             if not df_g_oee.empty:
-                # Filtrado de columnas numéricas para evitar error mean()
                 numeric_cols = ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']
                 m_g = df_g_oee[numeric_cols].mean().to_dict()
 
@@ -466,24 +461,25 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             if not oee_target_df.empty:
                 df_m_oee = oee_target_df[oee_target_df['Máquina'] == maq]
                 if not df_m_oee.empty:
-                    print_pdf_metric_row(pdf, f"    > {maq}", df_m_oee.iloc[0].to_dict())
+                    # Promediamos la máquina porque ahora tenemos registros diarios limpios
+                    print_pdf_metric_row(pdf, f"    > {maq}", df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].mean().to_dict())
         pdf.ln(3)
 
-        # --- APLICACIÓN DE CAMBIO: TABLA DE HORARIOS L-V POR TURNO ---
         check_space(pdf, 50)
         print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         
         df_pdf_g_horarios = df_pdf_g.copy()
-        if not df_pdf_g_horarios.empty and 'Inicio' in df_pdf_g_horarios.columns:
+        if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
             df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
             df_pdf_g_horarios['Dia_Semana'] = df_pdf_g_horarios['Fecha_DT'].dt.dayofweek
             
             horarios_list = []
             for (maq, turno, dia), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno', 'Dia_Semana']):
-                if dia > 4: continue # Solo Lunes a Viernes
-                ini = pd.to_datetime(grp['Inicio']).min().strftime('%H:%M')
-                fin = pd.to_datetime(grp['Fin']).max().strftime('%H:%M')
-                horarios_list.append({'Máquina': maq, 'Turno': turno, 'Dia': dia, 'Rango': f"{ini} - {fin}"})
+                if dia > 4: continue # Solo de Lunes a Viernes
+                ini = parse_time_to_mins(grp['Inicio_Str'].min())
+                fin = parse_time_to_mins(grp['Fin_Str'].max())
+                if ini is not None and fin is not None:
+                    horarios_list.append({'Máquina': maq, 'Turno': turno, 'Dia': dia, 'Rango': f"{mins_to_time_str(ini)} - {mins_to_time_str(fin)}"})
 
             if horarios_list:
                 df_h = pd.DataFrame(horarios_list).pivot_table(index=['Máquina', 'Turno'], columns='Dia', values='Rango', aggfunc='first').reset_index()
@@ -554,9 +550,17 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                     agg_f = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
                     agg_f['Label'] = agg_f.apply(lambda r: f" {str(r['Detalle_Final'])[:45]} — {r['Tiempo (Min)']:.0f} min ({(r['Tiempo (Min)']/max(t_falla,1))*100:.1f}%)", axis=1)
                     
+                    # CORRECCIÓN DE GRÁFICO CORTADO: Se extiende el rango del eje X y se desactiva el recorte
+                    max_x_val = agg_f['Tiempo (Min)'].max() if not agg_f.empty else 1
                     fig_top3 = px.bar(agg_f, x='Tiempo (Min)', y='Detalle_Final', orientation='h', text='Label')
-                    fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'))
-                    fig_top3.update_layout(height=140, width=700, margin=dict(t=5, b=5, l=10, r=400), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False), yaxis=dict(title='', autorange="reversed", showticklabels=False))
+                    fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'), cliponaxis=False)
+                    fig_top3.update_layout(
+                        height=140, width=700, 
+                        margin=dict(t=5, b=5, l=10, r=20), # Margen derecho reducido, lo compensamos con el rango de x
+                        plot_bgcolor='rgba(0,0,0,0)', 
+                        xaxis=dict(visible=False, range=[0, max_x_val * 2.5]), # Doble espacio para que el texto no se corte nunca
+                        yaxis=dict(title='', autorange="reversed", showticklabels=False)
+                    )
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
                         fig_top3.write_image(tmp_chart.name, engine="kaleido")
@@ -565,14 +569,13 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
                 dibujar_tabla_eventos_detallada(df_maq[df_maq['Estado_Global'] == 'Parada Programada'], 'Detalle_Final', "Paradas Programadas", theme_color)
 
-        # --- APLICACIÓN DE CAMBIO: GRÁFICOS DE TORTA CON ETIQUETAS EXTERNAS ---
         check_space(pdf, 90)
         print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color)
         y_base = pdf.get_y()
         resumen_global = df_pdf_g.groupby('Estado_Global')['Tiempo (Min)'].sum().reset_index()
-        fig_g = px.pie(resumen_global, values='Tiempo (Min)', names='Estado_Global', hole=0.4, title="Global (Hs)", color_discrete_sequence=pie_colors)
         
-        # Etiquetas externas añadidas
+        # CORRECCIÓN GRÁFICOS: Etiquetas afuera (percent+label) para mantener la estética
+        fig_g = px.pie(resumen_global, values='Tiempo (Min)', names='Estado_Global', hole=0.4, title="Global (Hs)", color_discrete_sequence=pie_colors)
         fig_g.update_traces(textinfo='percent+label', textposition='outside', textfont_size=11)
         fig_g.update_layout(width=380, height=280, margin=dict(t=30, b=10, l=10, r=10), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
         
@@ -586,7 +589,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             resumen_fallas = df_fallas_grupo.groupby('Categoria_Macro')['Tiempo (Min)'].sum().reset_index()
             fig_p = px.pie(resumen_fallas, values='Tiempo (Min)', names='Categoria_Macro', hole=0.4, title="Fallas por Área (Hs)", color_discrete_sequence=pie_colors)
             
-            # Etiquetas externas añadidas
             fig_p.update_traces(textinfo='percent+label', textposition='outside', textfont_size=11)
             fig_p.update_layout(width=380, height=280, margin=dict(t=30, b=10, l=10, r=10), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
             
@@ -595,8 +597,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.image(tmp2.name, x=105, y=y_base, w=95)
                 os.remove(tmp2.name)
 
-        pdf.set_y(y_base + 85)
-        pdf.ln(5)
+        pdf.set_y(y_base + 85); pdf.ln(5)
 
         # Produccion Grupo
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g] if not df_prod_pdf.empty else pd.DataFrame()
@@ -630,7 +631,6 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
     print_section_title(pdf, "Performance de Operarios General", theme_color)
     
     if not op_target_df.empty:
-        # CORRECCIÓN: Manejo de promedios para performance
         df_filt = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
         if not df_filt.empty:
             df_filt['PERFORMANCE'] = pd.to_numeric(df_filt['PERFORMANCE'], errors='coerce').fillna(0)
