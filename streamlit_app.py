@@ -950,4 +950,6 @@ with col_p3:
             with st.spinner("Generando PDF Soldadura..."):
                 try:
                     pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo)
-                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=
+                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generando PDF: {e}")
