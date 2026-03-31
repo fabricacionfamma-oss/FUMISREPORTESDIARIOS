@@ -358,7 +358,7 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         df_prod_pdf = prod_target_df.copy()
         df_prod_pdf['Grupo_Máquina'] = df_prod_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
 
-    # CORRECCIÓN DE OEE: Cargar base
+    # CORRECCIÓN DE OEE: Cargar base cruda para procesar sin manipular el dato que calculó Wii-BI
     if not oee_target_df.empty:
         for c in ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']:
             if c in oee_target_df.columns:
@@ -451,18 +451,19 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
         pdf.cell(0, 10, clean_text(f"SECCIÓN GRUPO: {g}"), ln=True, align='L', border='B')
         pdf.ln(5)
 
-        # ----------------------------------------------------
-        # CORRECCIÓN DE CÁLCULO OEE: OEE = Disp * Perf * Cal
-        # ----------------------------------------------------
+        # -----------------------------------------------------------------------------------------------------
+        # CORRECCIÓN DE CÁLCULO OEE: Se respeta el valor OEE nativo de la tabla PROD_03 que arroja Wii-BI.
+        # Para reportes semanales, se mantiene la sumatoria dividida por los 7 días de la semana.
+        # -----------------------------------------------------------------------------------------------------
         m_g = {'OEE': 0, 'DISPONIBILIDAD': 0, 'PERFORMANCE': 0, 'CALIDAD': 0}
         if not oee_target_df.empty:
             df_g_oee = oee_target_df[oee_target_df['Máquina'].isin(maq_del_grupo)]
             if not df_g_oee.empty:
-                m_g['DISPONIBILIDAD'] = df_g_oee['DISPONIBILIDAD'].mean()
-                m_g['PERFORMANCE'] = df_g_oee['PERFORMANCE'].mean()
-                m_g['CALIDAD'] = df_g_oee['CALIDAD'].mean()
-                # El OEE se calcula multiplicando para reflejar el dashboard diario
-                m_g['OEE'] = m_g['DISPONIBILIDAD'] * m_g['PERFORMANCE'] * m_g['CALIDAD']
+                numeric_cols = ['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']
+                if p_tipo == "Semanal":
+                    m_g = (df_g_oee.groupby('Máquina')[numeric_cols].sum() / 7).mean().to_dict()
+                else:
+                    m_g = df_g_oee[numeric_cols].mean().to_dict()
 
         print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
@@ -471,20 +472,14 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
             if not oee_target_df.empty:
                 df_m_oee = oee_target_df[oee_target_df['Máquina'] == maq]
                 if not df_m_oee.empty:
-                    dict_maq = {
-                        'DISPONIBILIDAD': df_m_oee['DISPONIBILIDAD'].mean(),
-                        'PERFORMANCE': df_m_oee['PERFORMANCE'].mean(),
-                        'CALIDAD': df_m_oee['CALIDAD'].mean()
-                    }
-                    # OEE por máquina = Disp * Perf * Cal
-                    dict_maq['OEE'] = dict_maq['DISPONIBILIDAD'] * dict_maq['PERFORMANCE'] * dict_maq['CALIDAD']
+                    if p_tipo == "Semanal":
+                        dict_maq = (df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].sum() / 7).to_dict()
+                    else:
+                        dict_maq = df_m_oee[['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD']].mean().to_dict()
                     
                     print_pdf_metric_row(pdf, f"    > {maq}", dict_maq)
         pdf.ln(3)
 
-        # =========================================================================
-        # SECCIÓN 2: Horarios y Tiempo de Apertura (Lógica Dinámica)
-        # =========================================================================
         check_space(pdf, 50)
         print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         
@@ -723,6 +718,15 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
     
     if not op_target_df.empty:
         df_filt = op_target_df[op_target_df['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
+        
+        # CORRECCIÓN DE OPERARIOS: Fallback por si la base de datos no tiene cargada la fábrica de los operarios
+        if df_filt.empty and not df_pdf.empty:
+            ops_activos = []
+            for op_list in df_pdf['Operador'].unique():
+                if pd.notna(op_list) and op_list != '-':
+                    ops_activos.extend([o.strip() for o in op_list.split('/')])
+            df_filt = op_target_df[op_target_df['Operador'].isin(ops_activos)].copy()
+            
         if not df_filt.empty:
             df_filt['PERFORMANCE'] = pd.to_numeric(df_filt['PERFORMANCE'], errors='coerce').fillna(0)
             df_filt = df_filt.sort_values('PERFORMANCE', ascending=False)
@@ -739,6 +743,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 elif perf_val >= 80: pdf.set_text_color(200, 150, 0)
                 else: pdf.set_text_color(220, 20, 20)
                 pdf.cell(30, 7, f"{perf_val}%", 'B', 1, 'C'); pdf.set_text_color(50, 50, 50)
+        else:
+            pdf.set_font("Arial", 'I', 10)
+            pdf.cell(0, 10, clean_text("No hay datos de performance registrados para esta área en este período."), ln=True)
 
     # Tablas de tiempos de Baño y Refrigerio
     def agregar_tabla_tiempos(titulo, db_col, palabras_clave):
@@ -766,6 +773,9 @@ def crear_pdf(area, label_reporte, oee_target_df, op_target_df, prod_target_df, 
                 pdf.cell(80, 7, " " + clean_text(r['Operador'])[:35], 'B')
                 pdf.cell(55, 7, f"{r['Minutos']:.1f}", 'B', 0, 'C')
                 pdf.cell(55, 7, str(int(r['Cantidad'])), 'B', 1, 'C')
+        else:
+            pdf.set_font("Arial", 'I', 10)
+            pdf.cell(0, 10, clean_text("No hay registros de tiempo acumulado para este ítem en el período."), ln=True)
 
     pdf.set_link(link_tiempos)
     agregar_tabla_tiempos("Tiempo de Baño Acumulado", "BathTime", ["BAÑO", "BANO"])
