@@ -443,7 +443,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             print_pdf_metric_row(pdf, f"    > {maq}", metrics)
         pdf.ln(3)
 
-        # 2. HORARIOS (TABLAS ORIGINALES SOLICITADAS)
+        # 2. HORARIOS 
         check_space(pdf, 50); print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
         df_pdf_g_horarios = df_pdf_g.copy()
         if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
@@ -563,8 +563,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 pdf.cell(38, 7, clean_text(mins_to_duration_str(t_desc)), border=1, align='C', ln=True); pdf.ln(4)
                 
                 df_maq_fallas = df_maq[df_maq['Estado_Global'] == 'Falla/Gestión']
-                if not df_maq_fallas.empty:
-                    if p_tipo == "Mensual":
+                
+                # --- LÓGICA CONDICIONAL MENSUAL VS DIARIO/SEMANAL ---
+                if p_tipo == "Mensual":
+                    if not df_maq_fallas.empty:
                         check_space(pdf, 100); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
                         pdf.cell(0, 6, clean_text("> Top 15 Fallas (por tiempo):"), ln=True)
                         
@@ -594,8 +596,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend:
                             fig_trend.write_image(tmp_trend.name, engine="kaleido")
                             pdf.image(tmp_trend.name, w=170); os.remove(tmp_trend.name)
-                            
-                    else:
+                
+                else: # Lógica para Reportes Diarios y Semanales
+                    if not df_maq_fallas.empty:
                         check_space(pdf, 60); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
                         pdf.cell(0, 6, clean_text("> Top 3 Fallas (por tiempo):"), ln=True)
                         agg_f = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(3)
@@ -609,7 +612,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             pdf.image(tmp_chart.name, w=150); os.remove(tmp_chart.name)
                         
                         dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
-                        dibujar_tabla_eventos_detallada(df_maq[df_maq['Estado_Global'] == 'Parada Programada'], 'Detalle_Final', "Paradas Programadas", theme_color)
+                    
+                    df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
+                    if not df_maq_paradas.empty:
+                        dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Paradas Programadas", theme_color)
         else:
             check_space(pdf, 30); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True); pdf.ln(5)
