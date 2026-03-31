@@ -443,156 +443,113 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             print_pdf_metric_row(pdf, f"    > {maq}", metrics)
         pdf.ln(3)
 
-        # 2. HORARIOS Y TENDENCIAS
-        check_space(pdf, 20); print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
-        df_pdf_g_horarios = df_pdf_g.copy()
-        
-        if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
-            
-            # LÓGICA GRÁFICOS MENSUALES
-            if p_tipo == "Mensual":
-                daily_stats = []
-                for (maq, fecha), grp in df_pdf_g_horarios.groupby(['Máquina', 'Fecha_Filtro']):
-                    intervals = []
-                    for _, r in grp.iterrows():
-                        ini = parse_time_to_mins(r['Inicio_Str'])
-                        fin = parse_time_to_mins(r['Fin_Str'])
-                        if ini is not None and fin is not None:
-                            if fin < ini and (ini - fin) > 720: fin += 1440
-                            intervals.append([ini, fin])
-                    if not intervals: continue
-                    intervals.sort(key=lambda x: x[0]); merged = [intervals[0]]
-                    for current in intervals[1:]:
-                        last = merged[-1]
-                        if current[0] <= last[1]: last[1] = max(last[1], current[1])
-                        else: merged.append(current)
-                    
-                    total_active = sum(iv[1] - iv[0] for iv in merged)
-                    min_i = merged[0][0]
-                    max_f = merged[-1][1]
-                    
-                    daily_stats.append({
-                        'Fecha': pd.to_datetime(fecha).strftime('%d/%m'),
-                        'Fecha_DT': pd.to_datetime(fecha),
-                        'Máquina': maq,
-                        'Apertura Neta (Hs)': total_active / 60.0,
-                        'Hora Inicio': (min_i % 1440) / 60.0,
-                        'Hora Cierre': (max_f % 1440) / 60.0
-                    })
-                
-                if daily_stats:
-                    df_trends = pd.DataFrame(daily_stats).sort_values('Fecha_DT')
-                    
-                    for maq in sorted(df_trends['Máquina'].unique()):
-                        df_maq_trends = df_trends[df_trends['Máquina'] == maq]
-                        
-                        check_space(pdf, 75)
-                        pdf.set_font("Arial", 'B', 11); pdf.set_text_color(*comp_color)
-                        pdf.cell(0, 6, clean_text(f">> Máquina: {maq} - Tendencia Mensual"), ln=True)
-                        
-                        # Grafico 1: Horas Netas
-                        fig_neta = px.line(df_maq_trends, x='Fecha', y='Apertura Neta (Hs)', markers=True, title="Horas Netas de Producción")
-                        fig_neta.update_traces(line_color=hex_theme)
-                        fig_neta.update_yaxes(rangemode="tozero")
-                        fig_neta.update_layout(height=250, width=400, margin=dict(t=40, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', title_font_size=12)
-                        
-                        # Grafico 2: Inicio y Cierre
-                        fig_horarios = go.Figure()
-                        fig_horarios.add_trace(go.Scatter(x=df_maq_trends['Fecha'], y=df_maq_trends['Hora Inicio'], mode='lines+markers', name='Inicio', line=dict(color='#2ECC71')))
-                        fig_horarios.add_trace(go.Scatter(x=df_maq_trends['Fecha'], y=df_maq_trends['Hora Cierre'], mode='lines+markers', name='Cierre', line=dict(color='#E74C3C')))
-                        fig_horarios.update_yaxes(tickmode='array', tickvals=list(range(0, 25, 4)), ticktext=[f"{i:02d}:00" for i in range(0, 25, 4)], range=[0, 24])
-                        fig_horarios.update_layout(title="Horarios de Turno", height=250, width=400, margin=dict(t=40, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', title_font_size=12, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                        
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_n:
-                            fig_neta.write_image(tmp_n.name, engine="kaleido")
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_h:
-                            fig_horarios.write_image(tmp_h.name, engine="kaleido")
-                        
-                        y_curr = pdf.get_y()
-                        pdf.image(tmp_n.name, x=10, y=y_curr, w=95)
-                        pdf.image(tmp_h.name, x=105, y=y_curr, w=95)
-                        os.remove(tmp_n.name); os.remove(tmp_h.name)
-                        
-                        pdf.set_y(y_curr + 65)
-                        pdf.ln(2)
-
-            # LÓGICA TABLAS DIARIAS
-            elif p_tipo == "Diario":
-                tiempos_list = []
-                for (maq, turno), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno']):
-                    intervals = []
-                    for _, r in grp.iterrows():
-                        ini = parse_time_to_mins(r['Inicio_Str'])
-                        fin = parse_time_to_mins(r['Fin_Str'])
-                        if ini is not None and fin is not None:
-                            if fin < ini and (ini - fin) > 720: fin += 1440
-                            intervals.append([ini, fin])
-                    if not intervals: continue
-                    intervals.sort(key=lambda x: x[0]); merged = [intervals[0]]
-                    for current in intervals[1:]:
-                        last = merged[-1]
-                        if current[0] <= last[1]: last[1] = max(last[1], current[1])
-                        else: merged.append(current)
-                    total_active = sum(iv[1] - iv[0] for iv in merged)
-                    min_i, max_f = merged[0][0], merged[-1][1]; tiempo_bruto = max_f - min_i
-                    unregistered_time = max(0, tiempo_bruto - total_active)
-                    tiempos_list.append({'Máquina': maq, 'Turno': turno, 'Inicio': min_i, 'Fin': max_f, 'Total': total_active, 'NoReg': unregistered_time})
-                
-                df_horarios = pd.DataFrame(tiempos_list)
-                if not df_horarios.empty:
-                    df_horarios = df_horarios.sort_values(['Máquina', 'Turno'])
-                    def dibujar_cabeza_hora():
-                        setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
-                        pdf.cell(35, 7, "Maquina", 1, 0, 'C', True); pdf.cell(15, 7, "Turno", 1, 0, 'C', True)
-                        pdf.cell(25, 7, "Hora Inicio", 1, 0, 'C', True); pdf.cell(25, 7, "Hora Cierre", 1, 0, 'C', True)
-                        pdf.cell(45, 7, "Apertura Neta", 1, 0, 'C', True); pdf.cell(45, 7, "No Registrado", 1, 1, 'C', True)
-                        pdf.ln()
-                        
-                    dibujar_cabeza_hora()
-                    setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
-                    for _, r in df_horarios.iterrows():
-                        if pdf.get_y() > 265: 
-                            pdf.add_page(); dibujar_cabeza_hora(); setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
-                        pdf.cell(35, 6, " " + clean_text(str(r['Máquina'])[:15]), 1, 0, 'L')
-                        pdf.cell(15, 6, clean_text(str(r['Turno'])), 1, 0, 'C')
-                        pdf.cell(25, 6, clean_text(mins_to_time_str(r['Inicio'])), 1, 0, 'C'); pdf.cell(25, 6, clean_text(mins_to_time_str(r['Fin'])), 1, 0, 'C')
-                        pdf.cell(45, 6, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C'); pdf.cell(45, 6, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
-                        pdf.ln()
-                    pdf.ln(5)
-            
-            # LÓGICA TABLAS SEMANALES
+        # 2. HORARIOS O GRÁFICOS OEE MENSUALES
+        if p_tipo == "Mensual":
+            check_space(pdf, 20); print_section_title(pdf, "2. Análisis Visual de OEE por Máquina", theme_color)
+            maq_keys = list(maquinas_metricas.keys())
+            if not maq_keys:
+                pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de OEE para graficar."), ln=True)
             else:
-                df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
-                df_pdf_g_horarios['Dia_Semana'] = df_pdf_g_horarios['Fecha_DT'].dt.dayofweek
-                horarios_list = []
-                for (maq, turno, dia), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno', 'Dia_Semana']):
-                    if dia > 4: continue 
-                    ini = grp['Inicio_Str'].apply(parse_time_to_mins).min()
-                    fin = grp['Fin_Str'].apply(parse_time_to_mins).max()
-                    if pd.notna(ini) and pd.notna(fin):
-                        horarios_list.append({'Máquina': maq, 'Turno': turno, 'Dia': dia, 'Rango': f"{mins_to_time_str(ini)} - {mins_to_time_str(fin)}"})
-                if horarios_list:
-                    df_h = pd.DataFrame(horarios_list).pivot_table(index=['Máquina', 'Turno'], columns='Dia', values='Rango', aggfunc='first').reset_index()
-                    for i in range(5):
-                        if i not in df_h.columns: df_h[i] = "-"
-                    df_h = df_h.fillna("-").sort_values(['Máquina', 'Turno'])
-                    def dibujar_cabeza_semana():
-                        setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
-                        pdf.cell(25, 7, "Maquina", 1, 0, 'C', True); pdf.cell(12, 7, "Turno", 1, 0, 'C', True)
-                        for d in ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"]: pdf.cell(30, 7, d, 1, 0, 'C', True)
-                        pdf.ln()
+                for i in range(0, len(maq_keys), 2):
+                    maq1 = maq_keys[i]
+                    maq2 = maq_keys[i+1] if i+1 < len(maq_keys) else None
+                    check_space(pdf, 70)
+                    y_base = pdf.get_y()
+                    
+                    def build_oee_fig(m_name, m_data):
+                        x_labels = ['OEE', 'Disp.', 'Perf.', 'Calidad']
+                        y_vals = [m_data['OEE']*100, m_data['DISPONIBILIDAD']*100, m_data['PERFORMANCE']*100, m_data['CALIDAD']*100]
+                        f = go.Figure(data=[go.Bar(x=x_labels, y=y_vals, text=[f"{v:.1f}%" for v in y_vals], textposition='auto', marker_color=['#2C3E50', '#F1C40F', '#3498DB', '#2ECC71'])])
+                        max_y = max(y_vals) if y_vals else 100
+                        y_max = max_y * 1.2 if max_y > 0 else 100
+                        if y_max < 100: y_max = 110
+                        f.update_layout(title=dict(text=f"{m_name}", font=dict(size=14)), height=250, width=380, margin=dict(t=40, b=20, l=20, r=20), plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(range=[0, y_max], visible=False))
+                        return f
 
-                    dibujar_cabeza_semana()
-                    setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 7)
-                    for _, row in df_h.iterrows():
-                        if pdf.get_y() > 265: 
-                            pdf.add_page(); dibujar_cabeza_semana(); setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 7)
-                        pdf.cell(25, 6, clean_text(row['Máquina']), 1); pdf.cell(12, 6, clean_text(str(row.get('Turno', '-'))), 1, 0, 'C')
-                        for i in range(5): pdf.cell(30, 6, str(row.get(i, "-")), 1, 0, 'C')
-                        pdf.ln()
-                    pdf.ln(5)
+                    fig1 = build_oee_fig(maq1, maquinas_metricas[maq1])
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp1:
+                        fig1.write_image(tmp1.name, engine="kaleido"); pdf.image(tmp1.name, x=10, y=y_base, w=95); os.remove(tmp1.name)
+                        
+                    if maq2:
+                        fig2 = build_oee_fig(maq2, maquinas_metricas[maq2])
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp2:
+                            fig2.write_image(tmp2.name, engine="kaleido"); pdf.image(tmp2.name, x=105, y=y_base, w=95); os.remove(tmp2.name)
+                            
+                    pdf.set_y(y_base + 65); pdf.ln(2)
         else:
-            pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay horarios registrados para generar las estadísticas."), ln=True)
+            # Lógica Diaria/Semanal (Tablas)
+            check_space(pdf, 30); print_section_title(pdf, "2. Horarios y Tiempo de Apertura", theme_color)
+            df_pdf_g_horarios = df_pdf_g.copy()
+            if not df_pdf_g_horarios.empty and 'Inicio_Str' in df_pdf_g_horarios.columns:
+                if p_tipo == "Diario":
+                    tiempos_list = []
+                    for (maq, turno), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno']):
+                        intervals = []
+                        for _, r in grp.iterrows():
+                            ini = parse_time_to_mins(r['Inicio_Str']); fin = parse_time_to_mins(r['Fin_Str'])
+                            if ini is not None and fin is not None:
+                                if fin < ini and (ini - fin) > 720: fin += 1440
+                                intervals.append([ini, fin])
+                        if not intervals: continue
+                        intervals.sort(key=lambda x: x[0]); merged = [intervals[0]]
+                        for current in intervals[1:]:
+                            last = merged[-1]
+                            if current[0] <= last[1]: last[1] = max(last[1], current[1])
+                            else: merged.append(current)
+                        total_active = sum(iv[1] - iv[0] for iv in merged)
+                        min_i, max_f = merged[0][0], merged[-1][1]; tiempo_bruto = max_f - min_i
+                        unregistered_time = max(0, tiempo_bruto - total_active)
+                        tiempos_list.append({'Máquina': maq, 'Turno': turno, 'Inicio': min_i, 'Fin': max_f, 'Total': total_active, 'NoReg': unregistered_time})
+                    
+                    df_horarios = pd.DataFrame(tiempos_list)
+                    if not df_horarios.empty:
+                        df_horarios = df_horarios.sort_values(['Máquina', 'Turno'])
+                        def dibujar_cabeza_hora():
+                            setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
+                            pdf.cell(35, 7, "Maquina", 1, 0, 'C', True); pdf.cell(15, 7, "Turno", 1, 0, 'C', True)
+                            pdf.cell(25, 7, "Hora Inicio", 1, 0, 'C', True); pdf.cell(25, 7, "Hora Cierre", 1, 0, 'C', True)
+                            pdf.cell(45, 7, "Apertura Neta", 1, 0, 'C', True); pdf.cell(45, 7, "No Registrado", 1, 1, 'C', True); pdf.ln()
+                        
+                        dibujar_cabeza_hora()
+                        setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
+                        for _, r in df_horarios.iterrows():
+                            if pdf.get_y() > 265: 
+                                pdf.add_page(); dibujar_cabeza_hora(); setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
+                            pdf.cell(35, 6, " " + clean_text(str(r['Máquina'])[:15]), 1, 0, 'L'); pdf.cell(15, 6, clean_text(str(r['Turno'])), 1, 0, 'C')
+                            pdf.cell(25, 6, clean_text(mins_to_time_str(r['Inicio'])), 1, 0, 'C'); pdf.cell(25, 6, clean_text(mins_to_time_str(r['Fin'])), 1, 0, 'C')
+                            pdf.cell(45, 6, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C'); pdf.cell(45, 6, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
+                        pdf.ln(5)
+                else:
+                    df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
+                    df_pdf_g_horarios['Dia_Semana'] = df_pdf_g_horarios['Fecha_DT'].dt.dayofweek
+                    horarios_list = []
+                    for (maq, turno, dia), grp in df_pdf_g_horarios.groupby(['Máquina', 'Turno', 'Dia_Semana']):
+                        if dia > 4: continue 
+                        ini = grp['Inicio_Str'].apply(parse_time_to_mins).min(); fin = grp['Fin_Str'].apply(parse_time_to_mins).max()
+                        if pd.notna(ini) and pd.notna(fin):
+                            horarios_list.append({'Máquina': maq, 'Turno': turno, 'Dia': dia, 'Rango': f"{mins_to_time_str(ini)} - {mins_to_time_str(fin)}"})
+                    if horarios_list:
+                        df_h = pd.DataFrame(horarios_list).pivot_table(index=['Máquina', 'Turno'], columns='Dia', values='Rango', aggfunc='first').reset_index()
+                        for i in range(5):
+                            if i not in df_h.columns: df_h[i] = "-"
+                        df_h = df_h.fillna("-").sort_values(['Máquina', 'Turno'])
+                        def dibujar_cabeza_semana():
+                            setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
+                            pdf.cell(25, 7, "Maquina", 1, 0, 'C', True); pdf.cell(12, 7, "Turno", 1, 0, 'C', True)
+                            for d in ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"]: pdf.cell(30, 7, d, 1, 0, 'C', True)
+                            pdf.ln()
+
+                        dibujar_cabeza_semana()
+                        setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 7)
+                        for _, row in df_h.iterrows():
+                            if pdf.get_y() > 265: 
+                                pdf.add_page(); dibujar_cabeza_semana(); setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 7)
+                            pdf.cell(25, 6, clean_text(row['Máquina']), 1); pdf.cell(12, 6, clean_text(str(row.get('Turno', '-'))), 1, 0, 'C')
+                            for i in range(5): pdf.cell(30, 6, str(row.get(i, "-")), 1, 0, 'C')
+                            pdf.ln()
+                        pdf.ln(5)
+            else:
+                pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay horarios registrados para generar las estadísticas."), ln=True)
 
         # 3. DESGLOSE POR MÁQUINA
         maquinas_con_tiempo = []
@@ -636,7 +593,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 
                 df_maq_fallas = df_maq[df_maq['Estado_Global'] == 'Falla/Gestión']
                 
-                # --- LÓGICA CONDICIONAL MENSUAL VS DIARIO/SEMANAL ---
                 if p_tipo == "Mensual":
                     if not df_maq_fallas.empty:
                         check_space(pdf, 70); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
@@ -645,30 +601,23 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         agg_f15 = df_maq_fallas.groupby('Detalle_Final')['Tiempo (Min)'].sum().reset_index().sort_values('Tiempo (Min)', ascending=False).head(15)
                         agg_f15 = agg_f15.sort_values('Tiempo (Min)', ascending=True) 
                         agg_f15['Label'] = agg_f15.apply(lambda r: f" {str(r['Detalle_Final'])[:40]} — {r['Tiempo (Min)']:.0f}m", axis=1)
-                        
                         max_x_val = agg_f15['Tiempo (Min)'].max() if not agg_f15.empty else 1
                         fig_top15 = px.bar(agg_f15, x='Tiempo (Min)', y='Detalle_Final', orientation='h', text='Label')
                         fig_top15.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=11, color='black'), cliponaxis=False)
                         fig_top15.update_layout(height=max(200, len(agg_f15)*22), width=700, margin=dict(t=5, b=5, l=10, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 1.5]), yaxis=dict(title='', showticklabels=False))
-                        
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
-                            fig_top15.write_image(tmp_chart.name, engine="kaleido")
-                            pdf.image(tmp_chart.name, w=170); os.remove(tmp_chart.name)
+                            fig_top15.write_image(tmp_chart.name, engine="kaleido"); pdf.image(tmp_chart.name, w=170); os.remove(tmp_chart.name)
                         
                         check_space(pdf, 70); pdf.ln(5); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
                         pdf.cell(0, 6, clean_text("> Tendencia Diaria de Fallas (Minutos):"), ln=True)
                         
                         trend_df = df_maq_fallas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
                         trend_df['Fecha_Str'] = pd.to_datetime(trend_df['Fecha_Filtro']).dt.strftime('%d/%m')
-                        
                         fig_trend = px.line(trend_df, x='Fecha_Str', y='Tiempo (Min)', markers=True)
                         fig_trend.update_traces(line_color=hex_comp, marker=dict(size=8, color=hex_theme))
                         fig_trend.update_layout(height=250, width=700, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos")
-                        
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend:
-                            fig_trend.write_image(tmp_trend.name, engine="kaleido")
-                            pdf.image(tmp_trend.name, w=170); os.remove(tmp_trend.name)
-                
+                            fig_trend.write_image(tmp_trend.name, engine="kaleido"); pdf.image(tmp_trend.name, w=170); os.remove(tmp_trend.name)
                 else: 
                     if not df_maq_fallas.empty:
                         check_space(pdf, 50); pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*comp_color)
@@ -680,8 +629,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         fig_top3.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=13, color='black'), cliponaxis=False)
                         fig_top3.update_layout(height=140, width=700, margin=dict(t=5, b=5, l=10, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 2.5]), yaxis=dict(title='', autorange="reversed", showticklabels=False))
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
-                            fig_top3.write_image(tmp_chart.name, engine="kaleido")
-                            pdf.image(tmp_chart.name, w=150); os.remove(tmp_chart.name)
+                            fig_top3.write_image(tmp_chart.name, engine="kaleido"); pdf.image(tmp_chart.name, w=150); os.remove(tmp_chart.name)
                         
                         dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
                     
@@ -732,8 +680,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             def dibujar_cabeza_prod():
                 setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 9)
                 pdf.cell(40, 7, "Maquina", 1, 0, 'C', True); pdf.cell(60, 7, "Codigo", 1, 0, 'C', True)
-                pdf.cell(25, 7, "Buenas", 1, 0, 'C', True); pdf.cell(25, 7, "Retrab.", 1, 0, 'C', True); pdf.cell(30, 7, "Observ.", 1, 1, 'C', True)
-                pdf.ln()
+                pdf.cell(25, 7, "Buenas", 1, 0, 'C', True); pdf.cell(25, 7, "Retrab.", 1, 0, 'C', True); pdf.cell(30, 7, "Observ.", 1, 1, 'C', True); pdf.ln()
             
             dibujar_cabeza_prod()
             setup_table_row(pdf); pdf.set_font("Arial", '', 9)
@@ -742,8 +689,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if pdf.get_y() > 265:
                     pdf.add_page(); dibujar_cabeza_prod(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 pdf.cell(40, 7, " " + clean_text(str(row['Máquina'])[:25]), 'B'); pdf.cell(60, 7, " " + clean_text(str(row['Código'])[:40]), 'B') 
-                pdf.cell(25, 7, str(int(row['Buenas'])), 'B', 0, 'C'); pdf.cell(25, 7, str(int(row['Retrabajo'])), 'B', 0, 'C'); pdf.cell(30, 7, str(int(row['Observadas'])), 'B', 1, 'C')
-                pdf.ln()
+                pdf.cell(25, 7, str(int(row['Buenas'])), 'B', 0, 'C'); pdf.cell(25, 7, str(int(row['Retrabajo'])), 'B', 0, 'C'); pdf.cell(30, 7, str(int(row['Observadas'])), 'B', 1, 'C'); pdf.ln()
         else:
             check_space(pdf, 20); print_section_title(pdf, "5. Produccion por Maquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay producción registrada para las máquinas de este grupo en el período."), ln=True); pdf.ln(5)
