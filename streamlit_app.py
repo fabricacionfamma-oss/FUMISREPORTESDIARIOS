@@ -363,7 +363,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     hex_theme = '#%02x%02x%02x' % theme_color; hex_comp = '#%02x%02x%02x' % comp_color  
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
 
-    # Estandarización de métricas a formato de 0.00 a 1.00 para la impresión
     if not df_metrics_pdf.empty and df_metrics_pdf['OEE'].max() > 1.5:
         df_metrics_pdf['OEE'] = df_metrics_pdf['OEE'] / 100.0
         df_metrics_pdf['DISPONIBILIDAD'] = df_metrics_pdf['DISPONIBILIDAD'] / 100.0
@@ -458,7 +457,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.set_font("Times", 'B', 16); pdf.set_text_color(*theme_color)
         pdf.cell(0, 10, clean_text(f"SECCIÓN GRUPO: {g}"), ln=True, align='L', border='B'); pdf.ln(5)
 
-        # 1. RESUMEN OEE (Leyendo directo de Base de Datos)
+        # 1. RESUMEN OEE
         check_space(pdf, 30); print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         g_plan = 0; g_op = 0; g_buenas = 0; g_totales = 0
         g_disp_w = 0; g_perf_w = 0; g_oee_w = 0
@@ -476,7 +475,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 g_perf_w += metrics['PERFORMANCE'] * t_o
                 g_oee_w += metrics['OEE'] * t_p
                 
-        # Promedios ponderados del grupo
         g_disp = g_disp_w / g_plan if g_plan > 0 else 0
         g_perf = g_perf_w / g_op if g_op > 0 else 0
         g_cal = g_buenas / g_totales if g_totales > 0 else 0
@@ -715,16 +713,23 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         resumen_p['Promedio_Min'] = resumen_p['Total_Min'] / resumen_p['Cantidad']
                         resumen_p = resumen_p.sort_values('Total_Min', ascending=False)
                         
-                        trend_p = df_maq_paradas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
+                        # --- CAMBIO 2: LÍNEAS MULTICOLOR EN GRÁFICO DE TENDENCIA ---
+                        trend_p = df_maq_paradas.groupby(['Fecha_Filtro', 'Detalle_Final'])['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
                         trend_p['Fecha_Str'] = pd.to_datetime(trend_p['Fecha_Filtro']).dt.strftime('%d/%m')
+                        trend_p['Detalle_Corto'] = trend_p['Detalle_Final'].apply(lambda x: str(x)[:25] + "..." if len(str(x)) > 25 else str(x))
                         
-                        fig_trend_p = px.line(trend_p, x='Fecha_Str', y='Tiempo (Min)', markers=True)
-                        fig_trend_p.update_traces(line_color=hex_theme, marker=dict(size=8, color=hex_theme)) 
-                        fig_trend_p.update_layout(height=220, width=400, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos")
+                        fig_trend_p = px.line(trend_p, x='Fecha_Str', y='Tiempo (Min)', color='Detalle_Corto', markers=True, color_discrete_sequence=px.colors.qualitative.Safe)
+                        fig_trend_p.update_layout(
+                            height=240, width=420, 
+                            margin=dict(t=10, b=10, l=40, r=10), 
+                            plot_bgcolor='rgba(0,0,0,0)', 
+                            xaxis_title="", yaxis_title="Minutos",
+                            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=9), title="")
+                        )
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend_p:
                             fig_trend_p.write_image(tmp_trend_p.name, engine="kaleido")
-                            pdf.image(tmp_trend_p.name, x=110, y=y_base_p, w=90)
+                            pdf.image(tmp_trend_p.name, x=105, y=y_base_p, w=100)
                             os.remove(tmp_trend_p.name)
                             
                         pdf.set_y(y_base_p + 2)
@@ -744,10 +749,13 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             pdf.cell(16, 4.5, f"{rp['Promedio_Min']:.1f}m", 'B', 1, 'C')
                             max_y_tab = pdf.get_y()
                             
-                        pdf.set_y(max(max_y_tab, y_base_p + 55) + 5)
+                        pdf.set_y(max(max_y_tab, y_base_p + 65) + 5)
                         
-                        dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Detalle Cronológico Paradas Programadas", theme_color)
+                        # --- CAMBIO 1: QUITAR DETALLE CRONOLÓGICO DEL MENSUAL ---
+                        if p_tipo == "Semanal":
+                            dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Detalle Cronológico Paradas Programadas", theme_color)
                     else:
+                        # Reporte Diario
                         dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Paradas Programadas", theme_color)
 
         else:
