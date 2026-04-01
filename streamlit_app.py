@@ -597,7 +597,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay horarios registrados para generar las estadísticas."), ln=True)
 
-        # 3. DESGLOSE POR MÁQUINA
+        # 3. DESGLOSE POR MÁQUINA (Con salto de página garantizado)
         maquinas_con_tiempo = []
         if not df_pdf_g.empty:
             for maq in sorted(df_pdf_g['Máquina'].unique()):
@@ -606,9 +606,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if t_total > 0: maquinas_con_tiempo.append(maq)
         
         if maquinas_con_tiempo:
-            check_space(pdf, 20); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
-            impresas = 0
             for maq in maquinas_con_tiempo:
+                pdf.add_page() # <-- HOJA NUEVA POR CADA MÁQUINA DE FORMA ESTRICTA
+                
                 df_maq = df_pdf_g[df_pdf_g['Máquina'] == maq]
                 t_prod = df_maq[df_maq['Estado_Global'] == 'Producción']['Tiempo (Min)'].sum()
                 t_falla = df_maq[df_maq['Estado_Global'] == 'Falla/Gestión']['Tiempo (Min)'].sum()
@@ -616,14 +616,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 t_proy = df_maq[df_maq['Estado_Global'] == 'Proyecto']['Tiempo (Min)'].sum()
                 t_desc = df_maq[df_maq['Estado_Global'] == 'Descanso']['Tiempo (Min)'].sum()
                 
-                if impresas > 0:
-                    salto_ejecutado = check_space(pdf, 30) 
-                    if not salto_ejecutado:
-                        pdf.ln(6); pdf.set_draw_color(200, 200, 200); pdf.set_line_width(0.8)
-                        pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + 190, pdf.get_y())
-                        pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2); pdf.ln(6)
-                
-                impresas += 1
                 pdf.set_font("Arial", 'B', 12); pdf.set_text_color(255, 255, 255); pdf.set_fill_color(*comp_color)
                 pdf.cell(0, 8, clean_text(f"  MÁQUINA: {maq}"), border=0, ln=True, fill=True)
                 pdf.set_font("Arial", 'I', 8); pdf.set_text_color(120, 120, 120); pdf.cell(0, 5, clean_text(f"  Grupo: {g}"), border=0, ln=True); pdf.ln(2)
@@ -646,8 +638,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         agg_f15['Label'] = agg_f15.apply(lambda r: f" {str(r['Detalle_Final'])[:60]} — {r['Tiempo (Min)']:.0f}m", axis=1)
                         max_x_val = agg_f15['Tiempo (Min)'].max() if not agg_f15.empty else 1
                         
-                        trend_df = df_maq_fallas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
-                        trend_df['Fecha_Str'] = pd.to_datetime(trend_df['Fecha_Filtro']).dt.strftime('%d/%m')
+                        trend_df = df_maq_fallas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index()
+                        trend_df['Fecha_Filtro'] = pd.to_datetime(trend_df['Fecha_Filtro']) # <-- FECHA ESTRICTA
+                        trend_df = trend_df.sort_values('Fecha_Filtro')
                         
                         if pdf.get_y() + 65 > 275: pdf.add_page()
                         
@@ -661,8 +654,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         fig_top15.update_traces(marker_color=hex_comp, textposition='outside', textfont=dict(size=11, color='black'), cliponaxis=False)
                         fig_top15.update_layout(height=250, width=450, margin=dict(t=5, b=5, l=10, r=220), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 1.5]), yaxis=dict(title='', showticklabels=False))
                         
-                        fig_trend = px.line(trend_df, x='Fecha_Str', y='Tiempo (Min)', markers=True)
+                        fig_trend = px.line(trend_df, x='Fecha_Filtro', y='Tiempo (Min)', markers=True)
                         fig_trend.update_traces(line_color=hex_comp, marker=dict(size=8, color=hex_theme))
+                        fig_trend.update_xaxes(tickformat="%d/%m") # <-- DIBUJAR COMO DIA/MES
                         fig_trend.update_layout(height=250, width=400, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos")
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
@@ -699,7 +693,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
                 if not df_maq_paradas.empty:
                     if p_tipo in ["Mensual", "Semanal"]:
-                        check_space(pdf, 65)
+                        if pdf.get_y() > 180: pdf.add_page()
                         pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*theme_color) 
                         pdf.cell(95, 6, clean_text("> Análisis Paradas Programadas (SMED/Otros):"), 0, 0, 'L')
                         pdf.cell(95, 6, clean_text("> Tendencia Diaria de Paradas (Minutos):"), 0, 1, 'L')
@@ -713,18 +707,23 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         resumen_p['Promedio_Min'] = resumen_p['Total_Min'] / resumen_p['Cantidad']
                         resumen_p = resumen_p.sort_values('Total_Min', ascending=False)
                         
-                        # --- CAMBIO 2: LÍNEAS MULTICOLOR EN GRÁFICO DE TENDENCIA ---
-                        trend_p = df_maq_paradas.groupby(['Fecha_Filtro', 'Detalle_Final'])['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
-                        trend_p['Fecha_Str'] = pd.to_datetime(trend_p['Fecha_Filtro']).dt.strftime('%d/%m')
+                        trend_p = df_maq_paradas.groupby(['Fecha_Filtro', 'Detalle_Final'])['Tiempo (Min)'].sum().reset_index()
+                        trend_p['Fecha_Filtro'] = pd.to_datetime(trend_p['Fecha_Filtro']) # <-- FECHA ESTRICTA
+                        trend_p = trend_p.sort_values('Fecha_Filtro')
+                        
                         trend_p['Detalle_Corto'] = trend_p['Detalle_Final'].apply(lambda x: str(x)[:25] + "..." if len(str(x)) > 25 else str(x))
                         
-                        fig_trend_p = px.line(trend_p, x='Fecha_Str', y='Tiempo (Min)', color='Detalle_Corto', markers=True, color_discrete_sequence=px.colors.qualitative.Safe)
+                        top_5_eventos = resumen_p.head(5)['Detalle_Final'].tolist()
+                        trend_p_filtrado = trend_p[trend_p['Detalle_Final'].isin(top_5_eventos)]
+                        
+                        fig_trend_p = px.line(trend_p_filtrado, x='Fecha_Filtro', y='Tiempo (Min)', color='Detalle_Corto', markers=True, color_discrete_sequence=px.colors.qualitative.Safe)
+                        fig_trend_p.update_xaxes(tickformat="%d/%m") # <-- DIBUJAR COMO DIA/MES
                         fig_trend_p.update_layout(
-                            height=240, width=420, 
-                            margin=dict(t=10, b=10, l=40, r=10), 
+                            height=320, width=420, 
+                            margin=dict(t=10, b=100, l=40, r=10), 
                             plot_bgcolor='rgba(0,0,0,0)', 
                             xaxis_title="", yaxis_title="Minutos",
-                            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, font=dict(size=9), title="")
+                            legend=dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5, font=dict(size=8), title="")
                         )
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend_p:
@@ -749,25 +748,25 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             pdf.cell(16, 4.5, f"{rp['Promedio_Min']:.1f}m", 'B', 1, 'C')
                             max_y_tab = pdf.get_y()
                             
-                        pdf.set_y(max(max_y_tab, y_base_p + 65) + 5)
+                        pdf.set_y(max(max_y_tab, y_base_p + 75) + 5)
                         
-                        # --- CAMBIO 1: QUITAR DETALLE CRONOLÓGICO DEL MENSUAL ---
                         if p_tipo == "Semanal":
                             dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Detalle Cronológico Paradas Programadas", theme_color)
                     else:
-                        # Reporte Diario
                         dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Paradas Programadas", theme_color)
 
         else:
-            check_space(pdf, 20); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
+            pdf.add_page()
+            print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True); pdf.ln(5)
 
         # 4. RESUMEN VISUAL
         resumen_global = df_pdf_g.groupby('Estado_Global')['Tiempo (Min)'].sum().reset_index() if not df_pdf_g.empty else pd.DataFrame()
         total_global = resumen_global['Tiempo (Min)'].sum() if not resumen_global.empty else 0
 
+        pdf.add_page() # <-- HOJA NUEVA PARA RESÚMENES DEL GRUPO
         if total_global > 0:
-            check_space(pdf, 80); print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color); y_base = pdf.get_y()
+            print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color); y_base = pdf.get_y()
             fig_g = px.pie(resumen_global, values='Tiempo (Min)', names='Estado_Global', hole=0.4, title="Global (Hs)", color_discrete_sequence=pie_colors)
             fig_g.update_traces(textinfo='percent+label', textposition='outside', textfont_size=11)
             fig_g.update_layout(width=420, height=300, margin=dict(t=40, b=50, l=80, r=80), showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
@@ -783,18 +782,16 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp2:
                     fig_p.write_image(tmp2.name, engine="kaleido")
                     
-                if pdf.get_y() + 72 > 275: pdf.add_page(); y_base = pdf.get_y()
                 pdf.image(tmp1.name, x=5, y=y_base, w=100)
                 pdf.image(tmp2.name, x=105, y=y_base, w=100)
                 os.remove(tmp2.name)
             else:
-                if pdf.get_y() + 72 > 275: pdf.add_page(); y_base = pdf.get_y()
                 pdf.image(tmp1.name, x=55, y=y_base, w=100)
                 
             os.remove(tmp1.name)
             pdf.set_y(y_base + 75); pdf.ln(2)
         else:
-            check_space(pdf, 20); print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color)
+            print_section_title(pdf, "4. Resumen Visual de Tiempos", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay tiempos suficientes para generar los gráficos visuales."), ln=True); pdf.ln(5)
 
         # 5. PRODUCCIÓN POR MÁQUINA
