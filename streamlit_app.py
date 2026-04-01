@@ -702,9 +702,60 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         
                         dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
                     
-                    df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
-                    if not df_maq_paradas.empty:
-                        dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Paradas Programadas", theme_color)
+                # NUEVA SECCIÓN: PARADAS PROGRAMADAS (SMED, etc)
+                df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
+                if not df_maq_paradas.empty:
+                    check_space(pdf, 65)
+                    pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*theme_color) 
+                    pdf.cell(95, 6, clean_text("> Análisis Paradas Programadas (SMED/Otros):"), 0, 0, 'L')
+                    pdf.cell(95, 6, clean_text("> Tendencia Diaria de Paradas (Minutos):"), 0, 1, 'L')
+                    
+                    y_base_p = pdf.get_y()
+                    
+                    # Resumen y calculos
+                    resumen_p = df_maq_paradas.groupby('Detalle_Final').agg(
+                        Cantidad=('Tiempo (Min)', 'count'),
+                        Total_Min=('Tiempo (Min)', 'sum')
+                    ).reset_index()
+                    resumen_p['Promedio_Min'] = resumen_p['Total_Min'] / resumen_p['Cantidad']
+                    resumen_p = resumen_p.sort_values('Total_Min', ascending=False)
+                    
+                    trend_p = df_maq_paradas.groupby('Fecha_Filtro')['Tiempo (Min)'].sum().reset_index().sort_values('Fecha_Filtro')
+                    trend_p['Fecha_Str'] = pd.to_datetime(trend_p['Fecha_Filtro']).dt.strftime('%d/%m')
+                    
+                    # Gráfico
+                    fig_trend_p = px.line(trend_p, x='Fecha_Str', y='Tiempo (Min)', markers=True)
+                    fig_trend_p.update_traces(line_color=hex_theme, marker=dict(size=8, color=hex_theme)) 
+                    fig_trend_p.update_layout(height=220, width=400, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos")
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_trend_p:
+                        fig_trend_p.write_image(tmp_trend_p.name, engine="kaleido")
+                        pdf.image(tmp_trend_p.name, x=110, y=y_base_p, w=90)
+                        os.remove(tmp_trend_p.name)
+                        
+                    # Tabla
+                    pdf.set_y(y_base_p + 2)
+                    setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
+                    pdf.cell(50, 5, "Evento", 1, 0, 'C', True)
+                    pdf.cell(12, 5, "Cant.", 1, 0, 'C', True)
+                    pdf.cell(16, 5, "Total", 1, 0, 'C', True)
+                    pdf.cell(16, 5, "Prom.", 1, 1, 'C', True)
+                    
+                    setup_table_row(pdf); pdf.set_font("Arial", '', 7)
+                    max_y_tab = pdf.get_y()
+                    
+                    # Limitamos a Top 10 para no desbordar el área del gráfico
+                    for _, rp in resumen_p.head(10).iterrows():
+                        pdf.cell(50, 4.5, " " + clean_text(rp['Detalle_Final'])[:33], 'B', 0, 'L')
+                        pdf.cell(12, 4.5, str(int(rp['Cantidad'])), 'B', 0, 'C')
+                        pdf.cell(16, 4.5, f"{rp['Total_Min']:.0f}m", 'B', 0, 'C')
+                        pdf.cell(16, 4.5, f"{rp['Promedio_Min']:.1f}m", 'B', 1, 'C')
+                        max_y_tab = pdf.get_y()
+                        
+                    pdf.set_y(max(max_y_tab, y_base_p + 55) + 5)
+                    
+                    # Mantener el detalle cronológico
+                    dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Detalle Cronológico Paradas Programadas", theme_color)
         else:
             check_space(pdf, 20); print_section_title(pdf, "3. Analisis de Tiempos por Máquina", theme_color)
             pdf.set_font("Arial", 'I', 9); pdf.set_text_color(100, 100, 100); pdf.cell(0, 6, clean_text("No hay desglose de tiempos registrado para las máquinas de este grupo."), ln=True); pdf.ln(5)
