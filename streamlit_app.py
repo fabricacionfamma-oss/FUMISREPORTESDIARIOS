@@ -695,8 +695,8 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                     if p_tipo in ["Mensual", "Semanal"]:
                         if pdf.get_y() > 180: pdf.add_page()
                         pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*theme_color) 
-                        pdf.cell(95, 6, clean_text("> Análisis Paradas Programadas (SMED/Otros):"), 0, 0, 'L')
-                        pdf.cell(95, 6, clean_text("> Tendencia Diaria de Paradas (Minutos):"), 0, 1, 'L')
+                        pdf.cell(95, 6, clean_text("> SMED/OTROS:"), 0, 0, 'L')
+                        pdf.cell(95, 6, clean_text("> Tendencia Diaria (Promedio en Minutos):"), 0, 1, 'L')
                         
                         y_base_p = pdf.get_y()
                         
@@ -707,7 +707,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         resumen_p['Promedio_Min'] = resumen_p['Total_Min'] / resumen_p['Cantidad']
                         resumen_p = resumen_p.sort_values('Total_Min', ascending=False)
                         
-                        trend_p = df_maq_paradas.groupby(['Fecha_Filtro', 'Detalle_Final'])['Tiempo (Min)'].sum().reset_index()
+                        trend_p = df_maq_paradas.groupby(['Fecha_Filtro', 'Detalle_Final'])['Tiempo (Min)'].mean().reset_index()
                         trend_p['Fecha_Filtro'] = pd.to_datetime(trend_p['Fecha_Filtro']) # <-- FECHA ESTRICTA
                         trend_p = trend_p.sort_values('Fecha_Filtro')
                         
@@ -722,7 +722,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             height=320, width=420, 
                             margin=dict(t=10, b=100, l=40, r=10), 
                             plot_bgcolor='rgba(0,0,0,0)', 
-                            xaxis_title="", yaxis_title="Minutos",
+                            xaxis_title="", yaxis_title="Promedio Minutos",
                             legend=dict(orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5, font=dict(size=8), title="")
                         )
                         
