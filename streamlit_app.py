@@ -597,7 +597,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay horarios registrados para generar las estadísticas."), ln=True)
 
-        # 3. DESGLOSE POR MÁQUINA (Con salto de página garantizado)
+        # 3. DESGLOSE POR MÁQUINA (Espacio optimizado)
         maquinas_con_tiempo = []
         if not df_pdf_g.empty:
             for maq in sorted(df_pdf_g['Máquina'].unique()):
@@ -606,8 +606,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if t_total > 0: maquinas_con_tiempo.append(maq)
         
         if maquinas_con_tiempo:
+            pdf.ln(5) # Añadimos un pequeño margen antes de empezar a listar las máquinas
             for maq in maquinas_con_tiempo:
-                pdf.add_page() # <-- HOJA NUEVA POR CADA MÁQUINA DE FORMA ESTRICTA
+                check_space(pdf, 50) # <-- VERIFICA ESPACIO EN VEZ DE SALTO ESTRICTO
                 
                 df_maq = df_pdf_g[df_pdf_g['Máquina'] == maq]
                 t_prod = df_maq[df_maq['Estado_Global'] == 'Producción']['Tiempo (Min)'].sum()
