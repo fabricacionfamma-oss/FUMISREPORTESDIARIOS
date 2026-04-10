@@ -116,7 +116,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio}
             """
             
-            # Se agregan los numeradores y denominadores de los 4 indicadores para poder combinarlos por planta
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina,
                        SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
@@ -235,7 +234,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
 # ==========================================
 # 3. INTERFAZ: CONFIGURACIÓN PERIODO
 # ==========================================
-col_p1, col_p2, col_p3 = st.columns([1, 1.2, 1.5])
+col_p1, col_p2, col_p3 = st.columns([1, 1.2, 2.0])
 
 with col_p1:
     st.write("**1. Tipo de Reporte:**")
@@ -356,7 +355,136 @@ def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
 
 
 # ==========================================
-# 5. MOTOR GENERADOR DEL PDF
+# 5.A. NUEVO MOTOR PARA RESUMEN EJECUTIVO (SOLO MENSUAL)
+# ==========================================
+def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
+    theme_color = (44, 62, 80) # Color neutral para Global Planta
+    pdf = ReportePDF("GLOBAL PLANTA", fecha_str, theme_color)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    
+    print_section_title(pdf, "RESUMEN EJECUTIVO: KPI POR PLANTA", theme_color)
+
+    mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
+    def get_planta(maq_name):
+        maq_upper = str(maq_name).strip().upper()
+        grupo = mapa_limpio.get(maq_upper, 'OTRO')
+        if grupo in GRUPOS_ESTAMPADO: return 'ESTAMPADO'
+        if grupo in GRUPOS_SOLDADURA: return 'SOLDADURA'
+        return 'OTRO'
+
+    # Preparar df de metricas
+    df_met_all = df_metrics_pdf.copy()
+    if not df_met_all.empty and df_met_all['OEE'].max() > 1.5:
+        df_met_all['OEE'] = df_met_all['OEE'] / 100.0
+        df_met_all['DISPONIBILIDAD'] = df_met_all['DISPONIBILIDAD'] / 100.0
+        df_met_all['PERFORMANCE'] = df_met_all['PERFORMANCE'] / 100.0
+        df_met_all['CALIDAD'] = df_met_all['CALIDAD'] / 100.0
+
+    df_met_all['Planta'] = df_met_all['Máquina'].apply(get_planta)
+    
+    # Ponderaciones Matemáticas
+    df_met_all['T_Planificado'] = df_met_all['T_Operativo'].fillna(0) + df_met_all['T_Parada'].fillna(0)
+    df_met_all['Piezas_Totales'] = df_met_all['Buenas'].fillna(0) + df_met_all['Retrabajo'].fillna(0) + df_met_all['Observadas'].fillna(0)
+
+    df_met_all['OEE_Num'] = df_met_all['OEE'].fillna(0) * df_met_all['T_Planificado']
+    df_met_all['Disp_Num'] = df_met_all['DISPONIBILIDAD'].fillna(0) * df_met_all['T_Planificado']
+    df_met_all['Perf_Num'] = df_met_all['PERFORMANCE'].fillna(0) * df_met_all['T_Operativo']
+    df_met_all['Cal_Num'] = df_met_all['CALIDAD'].fillna(0) * df_met_all['Piezas_Totales']
+
+    met_planta = df_met_all.groupby('Planta')[['OEE_Num', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Planificado', 'T_Operativo', 'Piezas_Totales']].sum()
+
+    def calc_metrics(p_name):
+        if p_name in met_planta.index:
+            row = met_planta.loc[p_name]
+            oee = row['OEE_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
+            disp = row['Disp_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
+            perf = row['Perf_Num'] / row['T_Operativo'] if row['T_Operativo'] > 0 else 0
+            cal = row['Cal_Num'] / row['Piezas_Totales'] if row['Piezas_Totales'] > 0 else 0
+            return oee, disp, perf, cal
+        return 0, 0, 0, 0
+
+    oee_est, disp_est, perf_est, cal_est = calc_metrics('ESTAMPADO')
+    oee_sol, disp_sol, perf_sol, cal_sol = calc_metrics('SOLDADURA')
+
+    def draw_kpi_row(y, title, oee, disp, perf, cal):
+        pdf.set_xy(10, y)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.set_text_color(*theme_color)
+        pdf.cell(0, 6, clean_text(title), ln=1)
+        y_boxes = pdf.get_y() + 2
+        
+        w = 42; spacing = 5; x_start = 13.5
+        
+        def draw_box(x, title_box, val):
+            pdf.set_xy(x, y_boxes)
+            pdf.set_font("Arial", 'B', 9)
+            pdf.set_fill_color(*theme_color)
+            pdf.set_text_color(255, 255, 255)
+            pdf.cell(w, 8, clean_text(title_box), border=1, align='C', fill=True, ln=2)
+            
+            pdf.set_fill_color(245, 245, 245)
+            set_pdf_color(pdf, val)
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(w, 12, f"{val*100:.1f}%", border=1, align='C', fill=True)
+        
+        draw_box(x_start, "OEE", oee)
+        draw_box(x_start + w + spacing, "DISPONIBILIDAD", disp)
+        draw_box(x_start + 2*(w + spacing), "PERFORMANCE", perf)
+        draw_box(x_start + 3*(w + spacing), "CALIDAD", cal)
+        
+        return y_boxes + 25
+
+    y_curr = pdf.get_y() + 5
+    y_curr = draw_kpi_row(y_curr, "INDICADORES: ESTAMPADO", oee_est, disp_est, perf_est, cal_est)
+    y_curr += 8
+    y_curr = draw_kpi_row(y_curr, "INDICADORES: SOLDADURA", oee_sol, disp_sol, perf_sol, cal_sol)
+
+    if not df_trend.empty:
+        pdf.set_y(y_curr + 10)
+        pdf.set_font("Arial", 'B', 12); pdf.set_text_color(*theme_color)
+        pdf.cell(0, 6, clean_text("Evolución Mensual Histórica (4 Indicadores por Planta)"), ln=True)
+
+        df_trend_all = df_trend.copy()
+        df_trend_all['Planta'] = df_trend_all['Máquina'].apply(get_planta)
+
+        trend_planta = df_trend_all[df_trend_all['Planta'] != 'OTRO'].groupby(['Month', 'Planta'])[['OEE_Num', 'OEE_Den', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Operativo', 'Piezas_Totales']].sum().reset_index()
+        
+        trend_planta['OEE'] = (trend_planta['OEE_Num'] / trend_planta['OEE_Den']).fillna(0)
+        trend_planta['DISP'] = (trend_planta['Disp_Num'] / trend_planta['OEE_Den']).fillna(0)
+        trend_planta['PERF'] = (trend_planta['Perf_Num'] / trend_planta['T_Operativo']).fillna(0)
+        trend_planta['CAL'] = (trend_planta['Cal_Num'] / trend_planta['Piezas_Totales']).fillna(0)
+
+        trend_melt = trend_planta.melt(id_vars=['Month', 'Planta'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
+        
+        if trend_melt['Valor'].max() <= 1.5 and trend_melt['Valor'].max() > 0:
+            trend_melt['Valor'] = trend_melt['Valor'] * 100
+
+        meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+        trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
+
+        fig_glob = px.bar(
+            trend_melt, x='Mes_Nombre', y='Valor', color='Indicador', facet_row='Planta',
+            barmode='group', text_auto='.0f',
+            color_discrete_map={'OEE': '#2C3E50', 'DISP': '#2980B9', 'PERF': '#F39C12', 'CAL': '#27AE60'}
+        )
+        fig_glob.update_layout(
+            height=450, width=800, margin=dict(t=30, b=20, l=20, r=20),
+            yaxis_title='Porcentaje (%)', xaxis_title='',
+            plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        fig_glob.update_yaxes(range=[0, 110])
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_glob:
+            fig_glob.write_image(tmp_glob.name, engine="kaleido")
+            add_image_safe(pdf, tmp_glob.name, w_mm=190, h_mm=115, center=True)
+            os.remove(tmp_glob.name)
+
+    return pdf.output(dest='S').encode('latin-1')
+
+
+# ==========================================
+# 5.B. MOTOR GENERADOR DEL PDF PRINCIPAL
 # ==========================================
 def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf):
     if area.upper() == "ESTAMPADO":
@@ -396,11 +524,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     # --- ÍNDICE DEL REPORTE ---
     pdf.ln(10); pdf.set_font("Times", 'B', 18); pdf.set_text_color(*theme_color)
     pdf.cell(0, 10, clean_text("ÍNDICE DEL REPORTE"), ln=True, align='C')
-    
     pdf.ln(10); pdf.set_font("Arial", 'U', 12); pdf.set_text_color(*comp_color)
-    
-    if p_tipo == "Mensual":
-        pdf.cell(0, 8, clean_text("> Resumen Ejecutivo Mensual: KPI de Planta (Estampado y Soldadura)"), ln=True)
         
     for g in grupos_area:
         pdf.cell(0, 8, clean_text(f"> Reporte detallado de Grupo: {g}"), ln=True, link=links_grupos[g])
@@ -408,125 +532,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     pdf.cell(0, 8, clean_text("> Performance General de Operarios"), ln=True, link=link_perfo)
     pdf.cell(0, 8, clean_text("> Tablas de Tiempos Acumulados de Baño y Refrigerio"), ln=True, link=link_tiempos)
 
-    if df_pdf.empty and p_tipo != "Mensual":
+    if df_pdf.empty:
         pdf.add_page(); pdf.set_font("Arial", 'I', 12); pdf.set_text_color(100)
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
-
-    # =========================================================================
-    # NUEVA PÁGINA: RESUMEN EJECUTIVO (SÓLO PARA REPORTE MENSUAL)
-    # =========================================================================
-    if p_tipo == "Mensual":
-        pdf.add_page()
-        print_section_title(pdf, "RESUMEN EJECUTIVO: KPI POR PLANTA", theme_color)
-
-        def get_planta(maq_name):
-            maq_upper = str(maq_name).strip().upper()
-            grupo = mapa_limpio.get(maq_upper, 'OTRO')
-            if grupo in GRUPOS_ESTAMPADO: return 'ESTAMPADO'
-            if grupo in GRUPOS_SOLDADURA: return 'SOLDADURA'
-            return 'OTRO'
-
-        df_met_all = df_metrics_pdf.copy()
-        df_met_all['Planta'] = df_met_all['Máquina'].apply(get_planta)
-        
-        # Ponderaciones Matemáticas por Máquina para calcular el Real Global
-        df_met_all['T_Planificado'] = df_met_all['T_Operativo'].fillna(0) + df_met_all['T_Parada'].fillna(0)
-        df_met_all['Piezas_Totales'] = df_met_all['Buenas'].fillna(0) + df_met_all['Retrabajo'].fillna(0) + df_met_all['Observadas'].fillna(0)
-
-        df_met_all['OEE_Num'] = df_met_all['OEE'].fillna(0) * df_met_all['T_Planificado']
-        df_met_all['Disp_Num'] = df_met_all['DISPONIBILIDAD'].fillna(0) * df_met_all['T_Planificado']
-        df_met_all['Perf_Num'] = df_met_all['PERFORMANCE'].fillna(0) * df_met_all['T_Operativo']
-        df_met_all['Cal_Num'] = df_met_all['CALIDAD'].fillna(0) * df_met_all['Piezas_Totales']
-
-        met_planta = df_met_all.groupby('Planta')[['OEE_Num', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Planificado', 'T_Operativo', 'Piezas_Totales']].sum()
-
-        def calc_metrics(p_name):
-            if p_name in met_planta.index:
-                row = met_planta.loc[p_name]
-                oee = row['OEE_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
-                disp = row['Disp_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
-                perf = row['Perf_Num'] / row['T_Operativo'] if row['T_Operativo'] > 0 else 0
-                cal = row['Cal_Num'] / row['Piezas_Totales'] if row['Piezas_Totales'] > 0 else 0
-                return oee, disp, perf, cal
-            return 0, 0, 0, 0
-
-        oee_est, disp_est, perf_est, cal_est = calc_metrics('ESTAMPADO')
-        oee_sol, disp_sol, perf_sol, cal_sol = calc_metrics('SOLDADURA')
-
-        def draw_kpi_row(y, title, oee, disp, perf, cal):
-            pdf.set_xy(10, y)
-            pdf.set_font("Arial", 'B', 12)
-            pdf.set_text_color(*theme_color)
-            pdf.cell(0, 6, clean_text(title), ln=1)
-            y_boxes = pdf.get_y() + 2
-            
-            w = 42; spacing = 5; x_start = 13.5
-            
-            def draw_box(x, title_box, val):
-                pdf.set_xy(x, y_boxes)
-                pdf.set_font("Arial", 'B', 9)
-                pdf.set_fill_color(*theme_color)
-                pdf.set_text_color(255, 255, 255)
-                pdf.cell(w, 8, clean_text(title_box), border=1, align='C', fill=True, ln=2)
-                
-                pdf.set_fill_color(245, 245, 245)
-                set_pdf_color(pdf, val)
-                pdf.set_font("Arial", 'B', 16)
-                pdf.cell(w, 12, f"{val*100:.1f}%", border=1, align='C', fill=True)
-            
-            draw_box(x_start, "OEE", oee)
-            draw_box(x_start + w + spacing, "DISPONIBILIDAD", disp)
-            draw_box(x_start + 2*(w + spacing), "PERFORMANCE", perf)
-            draw_box(x_start + 3*(w + spacing), "CALIDAD", cal)
-            
-            return y_boxes + 25
-
-        y_curr = pdf.get_y() + 5
-        y_curr = draw_kpi_row(y_curr, "INDICADORES: ESTAMPADO", oee_est, disp_est, perf_est, cal_est)
-        y_curr += 8
-        y_curr = draw_kpi_row(y_curr, "INDICADORES: SOLDADURA", oee_sol, disp_sol, perf_sol, cal_sol)
-
-        if not df_trend.empty:
-            pdf.set_y(y_curr + 10)
-            pdf.set_font("Arial", 'B', 12); pdf.set_text_color(*theme_color)
-            pdf.cell(0, 6, clean_text("Evolución Mensual Histórica (4 Indicadores por Planta)"), ln=True)
-
-            df_trend_all = df_trend.copy()
-            df_trend_all['Planta'] = df_trend_all['Máquina'].apply(get_planta)
-
-            trend_planta = df_trend_all[df_trend_all['Planta'] != 'OTRO'].groupby(['Month', 'Planta'])[['OEE_Num', 'OEE_Den', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Operativo', 'Piezas_Totales']].sum().reset_index()
-            
-            trend_planta['OEE'] = (trend_planta['OEE_Num'] / trend_planta['OEE_Den']).fillna(0)
-            trend_planta['DISP'] = (trend_planta['Disp_Num'] / trend_planta['OEE_Den']).fillna(0)
-            trend_planta['PERF'] = (trend_planta['Perf_Num'] / trend_planta['T_Operativo']).fillna(0)
-            trend_planta['CAL'] = (trend_planta['Cal_Num'] / trend_planta['Piezas_Totales']).fillna(0)
-
-            trend_melt = trend_planta.melt(id_vars=['Month', 'Planta'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
-            
-            if trend_melt['Valor'].max() <= 1.5 and trend_melt['Valor'].max() > 0:
-                trend_melt['Valor'] = trend_melt['Valor'] * 100
-
-            meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
-            trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
-
-            fig_glob = px.bar(
-                trend_melt, x='Mes_Nombre', y='Valor', color='Indicador', facet_row='Planta',
-                barmode='group', text_auto='.0f',
-                color_discrete_map={'OEE': '#2C3E50', 'DISP': '#2980B9', 'PERF': '#F39C12', 'CAL': '#27AE60'}
-            )
-            fig_glob.update_layout(
-                height=450, width=800, margin=dict(t=30, b=20, l=20, r=20),
-                yaxis_title='Porcentaje (%)', xaxis_title='',
-                plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            fig_glob.update_yaxes(range=[0, 110])
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_glob:
-                fig_glob.write_image(tmp_glob.name, engine="kaleido")
-                add_image_safe(pdf, tmp_glob.name, w_mm=190, h_mm=115, center=True)
-                os.remove(tmp_glob.name)
-    # =========================================================================
 
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
         if not df_subset.empty:
@@ -1070,21 +1079,36 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
 # ==========================================
 with col_p3:
     st.write("**3. Generar y Descargar:**")
-    col_btn1, col_btn2 = st.columns(2)
+    
+    if pdf_tipo == "Mensual":
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+    else:
+        col_btn1, col_btn2 = st.columns(2)
+        
     with col_btn1:
-        if st.button("Preparar Reporte ESTAMPADO", use_container_width=True):
+        if st.button("Reporte ESTAMPADO", use_container_width=True):
             with st.spinner("Generando PDF Estampado..."):
                 try:
                     pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics)
-                    st.download_button("Descargar PDF Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
+                    st.download_button("Descargar Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
                     
     with col_btn2:
-        if st.button("Preparar Reporte SOLDADURA", use_container_width=True):
+        if st.button("Reporte SOLDADURA", use_container_width=True):
             with st.spinner("Generando PDF Soldadura..."):
                 try:
                     pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics)
-                    st.download_button("Descargar PDF Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
+                    st.download_button("Descargar Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
+                    
+    if pdf_tipo == "Mensual":
+        with col_btn3:
+            if st.button("Resumen Ejecutivo", use_container_width=True):
+                with st.spinner("Generando Resumen Ejecutivo Global..."):
+                    try:
+                        pdf_resumen = crear_pdf_resumen_ejecutivo(pdf_label, df_trend, df_metrics)
+                        st.download_button("Descargar Resumen", data=pdf_resumen, file_name=f"Resumen_Global_Planta_{file_label}.pdf", mime="application/pdf", use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error generando PDF: {e}")
