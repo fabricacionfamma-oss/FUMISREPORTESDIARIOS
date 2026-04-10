@@ -116,8 +116,12 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio}
             """
             
+            # --- MODIFICACIÓN DE LA CONSULTA TREND ---
+            # Agregamos los numeradores y denominadores para poder calcular el global de planta matemáticamente.
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina,
+                       SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
+                       SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
                        (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
                 FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId
                 WHERE p.Year = {anio} AND p.Month <= {mes}
@@ -385,10 +389,14 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     links_grupos = {g: pdf.add_link() for g in grupos_area}
     link_perfo = pdf.add_link(); link_tiempos = pdf.add_link()
 
+    # --- ÍNDICE DEL REPORTE ---
     pdf.ln(10); pdf.set_font("Times", 'B', 18); pdf.set_text_color(*theme_color)
     pdf.cell(0, 10, clean_text("ÍNDICE DEL REPORTE"), ln=True, align='C')
     
     pdf.ln(10); pdf.set_font("Arial", 'U', 12); pdf.set_text_color(*comp_color)
+    if p_tipo == "Mensual":
+        pdf.cell(0, 8, clean_text("> Resumen Ejecutivo Mensual (Planta vs Global)"), ln=True)
+        
     for g in grupos_area:
         pdf.cell(0, 8, clean_text(f"> Reporte detallado de Grupo: {g}"), ln=True, link=links_grupos[g])
     pdf.ln(5)
@@ -399,6 +407,94 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.add_page(); pdf.set_font("Arial", 'I', 12); pdf.set_text_color(100)
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
+
+    # =========================================================================
+    # NUEVO: RESUMEN EJECUTIVO PLANTA VS GLOBAL (SÓLO MENSUAL)
+    # =========================================================================
+    if p_tipo == "Mensual":
+        pdf.add_page()
+        print_section_title(pdf, "RESUMEN EJECUTIVO: OEE PLANTA VS GLOBAL", theme_color)
+
+        def get_planta(maq_name):
+            maq_upper = str(maq_name).strip().upper()
+            grupo = mapa_limpio.get(maq_upper, 'OTRO')
+            if grupo in GRUPOS_ESTAMPADO: return 'ESTAMPADO'
+            if grupo in GRUPOS_SOLDADURA: return 'SOLDADURA'
+            return 'OTRO'
+
+        df_met_all = df_metrics_pdf.copy()
+        df_met_all['Planta'] = df_met_all['Máquina'].apply(get_planta)
+        
+        # Ponderamos por el tiempo total para calcular un OEE real global
+        df_met_all['T_Planificado'] = df_met_all['T_Operativo'].fillna(0) + df_met_all['T_Parada'].fillna(0)
+        df_met_all['OEE_Num'] = df_met_all['OEE'].fillna(0) * df_met_all['T_Planificado']
+
+        met_planta = df_met_all.groupby('Planta')[['OEE_Num', 'T_Planificado']].sum()
+        oee_est = met_planta.loc['ESTAMPADO', 'OEE_Num'] / met_planta.loc['ESTAMPADO', 'T_Planificado'] if 'ESTAMPADO' in met_planta.index and met_planta.loc['ESTAMPADO', 'T_Planificado'] > 0 else 0
+        oee_sol = met_planta.loc['SOLDADURA', 'OEE_Num'] / met_planta.loc['SOLDADURA', 'T_Planificado'] if 'SOLDADURA' in met_planta.index and met_planta.loc['SOLDADURA', 'T_Planificado'] > 0 else 0
+
+        tot_num = df_met_all['OEE_Num'].sum()
+        tot_den = df_met_all['T_Planificado'].sum()
+        oee_glob = tot_num / tot_den if tot_den > 0 else 0
+
+        y_boxes = pdf.get_y() + 5
+        def draw_oee_box(x, y, w, h, title, val):
+            pdf.set_xy(x, y)
+            pdf.set_font("Arial", 'B', 11)
+            pdf.set_fill_color(*theme_color)
+            pdf.set_text_color(255, 255, 255)
+            pdf.cell(w, h/2, clean_text(title), border=1, align='C', fill=True, ln=2)
+            
+            pdf.set_fill_color(245, 245, 245)
+            set_pdf_color(pdf, val)
+            pdf.set_font("Arial", 'B', 18)
+            pdf.cell(w, h/2, f"{val*100:.1f}%", border=1, align='C', fill=True)
+
+        draw_oee_box(20, y_boxes, 50, 20, "OEE ESTAMPADO", oee_est)
+        draw_oee_box(80, y_boxes, 50, 20, "OEE SOLDADURA", oee_sol)
+        draw_oee_box(140, y_boxes, 50, 20, "OEE GLOBAL", oee_glob)
+
+        pdf.set_y(y_boxes + 30)
+
+        if not df_trend.empty:
+            pdf.ln(5)
+            pdf.set_font("Arial", 'B', 12); pdf.set_text_color(*theme_color)
+            pdf.cell(0, 6, clean_text("Evolución Mensual OEE - Plantas vs Global"), ln=True)
+
+            df_trend_all = df_trend.copy()
+            df_trend_all['Planta'] = df_trend_all['Máquina'].apply(get_planta)
+
+            trend_planta = df_trend_all[df_trend_all['Planta'] != 'OTRO'].groupby(['Month', 'Planta'])[['OEE_Num', 'OEE_Den']].sum().reset_index()
+            trend_global = df_trend_all.groupby(['Month'])[['OEE_Num', 'OEE_Den']].sum().reset_index()
+            trend_global['Planta'] = 'GLOBAL'
+
+            trend_final = pd.concat([trend_planta, trend_global], ignore_index=True)
+            trend_final['OEE_Perc'] = (trend_final['OEE_Num'] / trend_final['OEE_Den']).fillna(0)
+            
+            # Normalización a porcentajes
+            if trend_final['OEE_Perc'].max() <= 1.5 and trend_final['OEE_Perc'].max() > 0:
+                trend_final['OEE_Perc'] = trend_final['OEE_Perc'] * 100
+
+            meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+            trend_final['Mes_Nombre'] = trend_final['Month'].map(meses_map)
+
+            fig_glob = px.bar(
+                trend_final, x='Mes_Nombre', y='OEE_Perc', color='Planta',
+                barmode='group', text_auto='.1f',
+                color_discrete_map={'ESTAMPADO': '#3498DB', 'SOLDADURA': '#E67E22', 'GLOBAL': '#2C3E50'}
+            )
+            fig_glob.update_layout(
+                height=400, width=800, margin=dict(t=20, b=20, l=20, r=20),
+                yaxis_title='OEE (%)', xaxis_title='', legend_title='Indicador',
+                plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(range=[0, 110])
+            )
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_glob:
+                fig_glob.write_image(tmp_glob.name, engine="kaleido")
+                pdf.image(tmp_glob.name, x=10, y=pdf.get_y(), w=190)
+                os.remove(tmp_glob.name)
+
+    # =========================================================================
 
     def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
         if not df_subset.empty:
@@ -690,7 +786,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         
                         dibujar_tabla_eventos_detallada(df_maq_fallas, 'Detalle_Final', "Detalle de Tiempos Perdidos", comp_color)
                 
-                # --- NUEVA SECCIÓN DE PARADAS PROGRAMADAS (SMED) ---
+                # --- SECCIÓN DE PARADAS PROGRAMADAS (SMED) ---
                 df_maq_paradas = df_maq[df_maq['Estado_Global'] == 'Parada Programada']
                 if not df_maq_paradas.empty:
                     if p_tipo in ["Mensual", "Semanal"]:
