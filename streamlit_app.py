@@ -106,31 +106,17 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
 
-            # Novedad: Extraemos también las máquinas para el reporte mensual
+            # Consulta ORIGINAL oficial mensual
             q_op = f"""
-                SELECT op.Name as Operador, p.Factory as Fábrica, c.Name as Máquina,
-                       p.Performance, p.ProductiveTime
-                FROM OPER_M_01 p 
-                JOIN OPERATOR op ON p.OperatorId = op.OperatorId 
-                LEFT JOIN CELL c ON p.CellId = c.CellId
+                SELECT DISTINCT op.Name as Operador, p.Factory as Fábrica, 
+                       (SUM(p.Performance * p.ProductiveTime) OVER(PARTITION BY p.OperatorId) / NULLIF(SUM(p.ProductiveTime) OVER(PARTITION BY p.OperatorId), 0)) as PERFORMANCE, 
+                       SUM(p.BathTime) OVER(PARTITION BY p.OperatorId) as BathTime, 
+                       SUM(p.BreakTime) OVER(PARTITION BY p.OperatorId) as BreakTime, 
+                       SUM(p.FeedingTime) OVER(PARTITION BY p.OperatorId) as FeedingTime 
+                FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId 
                 WHERE p.Month = {mes} AND p.Year = {anio}
             """
-            df_op_raw = conn.query(q_op)
-            
-            if not df_op_raw.empty:
-                df_op_raw['Performance'] = pd.to_numeric(df_op_raw['Performance'], errors='coerce').fillna(0)
-                df_op_raw['ProductiveTime'] = pd.to_numeric(df_op_raw['ProductiveTime'], errors='coerce').fillna(0)
-                df_op_raw['Perf_Num'] = df_op_raw['Performance'] * df_op_raw['ProductiveTime']
-                
-                df_op_target = df_op_raw.groupby(['Operador', 'Fábrica']).agg(
-                    Perf_Num=('Perf_Num', 'sum'),
-                    ProductiveTime=('ProductiveTime', 'sum'),
-                    Maquinas=('Máquina', lambda x: ', '.join(sorted(set([str(m).strip() for m in x if pd.notna(m) and str(m).strip() != '']))))
-                ).reset_index()
-                
-                df_op_target['PERFORMANCE'] = df_op_target['Perf_Num'] / df_op_target['ProductiveTime'].replace(0, 1)
-            else:
-                df_op_target = pd.DataFrame()
+            df_op_target = conn.query(q_op)
             
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina,
@@ -169,12 +155,12 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
             
+            # Consulta ORIGINAL oficial diaria (Sin cruce con CellId para no romper SQL)
             q_op = f"""
-                SELECT op.Name as Operador, p.Factory as Fábrica, c.Name as Máquina,
+                SELECT op.Name as Operador, p.Factory as Fábrica,
                        p.Performance, p.ProductiveTime
                 FROM OPER_D_01 p 
                 JOIN OPERATOR op ON p.OperatorId = op.OperatorId 
-                LEFT JOIN CELL c ON p.CellId = c.CellId
                 WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' 
             """
             df_op_raw = conn.query(q_op)
@@ -186,8 +172,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 
                 df_op_target = df_op_raw.groupby(['Operador', 'Fábrica']).agg(
                     Perf_Num=('Perf_Num', 'sum'),
-                    ProductiveTime=('ProductiveTime', 'sum'),
-                    Maquinas=('Máquina', lambda x: ', '.join(sorted(set([str(m).strip() for m in x if pd.notna(m) and str(m).strip() != '']))))
+                    ProductiveTime=('ProductiveTime', 'sum')
                 ).reset_index()
                 
                 df_op_target['PERFORMANCE'] = df_op_target['Perf_Num'] / df_op_target['ProductiveTime'].replace(0, 1)
@@ -533,7 +518,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         df_metrics_pdf['PERFORMANCE'] = df_metrics_pdf['PERFORMANCE'] / 100.0
         df_metrics_pdf['CALIDAD'] = df_metrics_pdf['CALIDAD'] / 100.0
 
-    df_pdf = pd.DataFrame(columns=['Máquina', 'Fábrica', 'Estado_Global', 'Tiempo (Min)'])
+    df_pdf = pd.DataFrame(columns=['Máquina', 'Fábrica', 'Estado_Global', 'Tiempo (Min)', 'Operador'])
     if not df_pdf_raw.empty:
         df_pdf = df_pdf_raw[df_pdf_raw['Fábrica'].astype(str).str.contains(area, case=False, na=False)].copy()
     df_pdf['Grupo_Máquina'] = df_pdf['Máquina'].astype(str).str.strip().str.upper().map(mapa_limpio).fillna('Otro')
@@ -1038,6 +1023,19 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             df_filt['PERFORMANCE'] = pd.to_numeric(df_filt['PERFORMANCE'], errors='coerce').fillna(0)
             df_filt = df_filt.sort_values('PERFORMANCE', ascending=False)
             
+            # MAQUINAS OPERADAS POR OPERADOR DESDE EVENTOS
+            operador_maquinas = {}
+            if not df_pdf.empty:
+                for _, r in df_pdf.iterrows():
+                    maq = str(r['Máquina']).strip()
+                    ops = str(r['Operador']).split('/')
+                    for o in ops:
+                        o = o.strip()
+                        if o and o != '-':
+                            if o not in operador_maquinas:
+                                operador_maquinas[o] = set()
+                            operador_maquinas[o].add(maq)
+
             def dibujar_cabeza_oper():
                 setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 9)
                 pdf.cell(50, 6, "Operador", 1, 0, 'C', True)
@@ -1052,8 +1050,11 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                     pdf.add_page(); dibujar_cabeza_oper(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 perf_val = int(round(row['PERFORMANCE']))
                 
-                maq_str = str(row.get('Maquinas', '-'))
-                pdf.cell(50, 5, " " + clean_text(str(row['Operador'])[:28]), 'B')
+                op_name = clean_text(str(row['Operador'])).strip()
+                maq_set = operador_maquinas.get(op_name, set())
+                maq_str = ", ".join(sorted(list(maq_set))) if maq_set else "-"
+                
+                pdf.cell(50, 5, " " + op_name[:28], 'B')
                 pdf.cell(35, 5, " " + clean_text(str(row['Fábrica'])[:18]), 'B')
                 pdf.cell(85, 5, " " + clean_text(maq_str[:50]), 'B')
                     
