@@ -106,15 +106,31 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
 
+            # Novedad: Extraemos también las máquinas para el reporte mensual
             q_op = f"""
-                SELECT DISTINCT op.Name as Operador, p.Factory as Fábrica, 
-                       (SUM(p.Performance * p.ProductiveTime) OVER(PARTITION BY p.OperatorId) / NULLIF(SUM(p.ProductiveTime) OVER(PARTITION BY p.OperatorId), 0)) as PERFORMANCE, 
-                       SUM(p.BathTime) OVER(PARTITION BY p.OperatorId) as BathTime, 
-                       SUM(p.BreakTime) OVER(PARTITION BY p.OperatorId) as BreakTime, 
-                       SUM(p.FeedingTime) OVER(PARTITION BY p.OperatorId) as FeedingTime 
-                FROM OPER_M_01 p JOIN OPERATOR op ON p.OperatorId = op.OperatorId 
+                SELECT op.Name as Operador, p.Factory as Fábrica, c.Name as Máquina,
+                       p.Performance, p.ProductiveTime
+                FROM OPER_M_01 p 
+                JOIN OPERATOR op ON p.OperatorId = op.OperatorId 
+                LEFT JOIN CELL c ON p.CellId = c.CellId
                 WHERE p.Month = {mes} AND p.Year = {anio}
             """
+            df_op_raw = conn.query(q_op)
+            
+            if not df_op_raw.empty:
+                df_op_raw['Performance'] = pd.to_numeric(df_op_raw['Performance'], errors='coerce').fillna(0)
+                df_op_raw['ProductiveTime'] = pd.to_numeric(df_op_raw['ProductiveTime'], errors='coerce').fillna(0)
+                df_op_raw['Perf_Num'] = df_op_raw['Performance'] * df_op_raw['ProductiveTime']
+                
+                df_op_target = df_op_raw.groupby(['Operador', 'Fábrica']).agg(
+                    Perf_Num=('Perf_Num', 'sum'),
+                    ProductiveTime=('ProductiveTime', 'sum'),
+                    Maquinas=('Máquina', lambda x: ', '.join(sorted(set([str(m).strip() for m in x if pd.notna(m) and str(m).strip() != '']))))
+                ).reset_index()
+                
+                df_op_target['PERFORMANCE'] = df_op_target['Perf_Num'] / df_op_target['ProductiveTime'].replace(0, 1)
+            else:
+                df_op_target = pd.DataFrame()
             
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina,
@@ -131,7 +147,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY p.Month, c.Name
             """
             df_trend = conn.query(q_trend)
-            df_op_target = conn.query(q_op)
             
         else:
             q_prod = f"""
@@ -154,7 +169,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
             
-            # --- NUEVA CONSULTA DE OPERARIOS DIARIA/SEMANAL ---
             q_op = f"""
                 SELECT op.Name as Operador, p.Factory as Fábrica, c.Name as Máquina,
                        p.Performance, p.ProductiveTime
@@ -170,7 +184,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 df_op_raw['ProductiveTime'] = pd.to_numeric(df_op_raw['ProductiveTime'], errors='coerce').fillna(0)
                 df_op_raw['Perf_Num'] = df_op_raw['Performance'] * df_op_raw['ProductiveTime']
                 
-                # Agrupamos por operador, calculamos performance ponderada y concatenamos máquinas
                 df_op_target = df_op_raw.groupby(['Operador', 'Fábrica']).agg(
                     Perf_Num=('Perf_Num', 'sum'),
                     ProductiveTime=('ProductiveTime', 'sum'),
@@ -375,7 +388,7 @@ def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
 # 5.A. NUEVO MOTOR PARA RESUMEN EJECUTIVO (SOLO MENSUAL)
 # ==========================================
 def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
-    theme_color = (44, 62, 80) # Color neutral para Global Planta
+    theme_color = (44, 62, 80) 
     pdf = ReportePDF("GLOBAL PLANTA", fecha_str, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -1027,14 +1040,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             
             def dibujar_cabeza_oper():
                 setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 9)
-                if p_tipo in ["Diario", "Semanal"]:
-                    pdf.cell(60, 6, "Operador", 1, 0, 'C', True)
-                    pdf.cell(100, 6, "Maquinas Operadas", 1, 0, 'C', True)
-                    pdf.cell(30, 6, "Perf.", 1, 1, 'C', True)
-                else:
-                    pdf.cell(100, 6, "Operador", 1, 0, 'C', True)
-                    pdf.cell(60, 6, "Fabrica", 1, 0, 'C', True)
-                    pdf.cell(30, 6, "Perf.", 1, 1, 'C', True)
+                pdf.cell(50, 6, "Operador", 1, 0, 'C', True)
+                pdf.cell(35, 6, "Fabrica", 1, 0, 'C', True)
+                pdf.cell(85, 6, "Maquinas Operadas", 1, 0, 'C', True)
+                pdf.cell(20, 6, "Perf.", 1, 1, 'C', True)
 
             dibujar_cabeza_oper()
             setup_table_row(pdf); pdf.set_font("Arial", '', 9)
@@ -1043,18 +1052,15 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                     pdf.add_page(); dibujar_cabeza_oper(); setup_table_row(pdf); pdf.set_font("Arial", '', 9)
                 perf_val = int(round(row['PERFORMANCE']))
                 
-                if p_tipo in ["Diario", "Semanal"]:
-                    maq_str = str(row.get('Maquinas', '-'))
-                    pdf.cell(60, 5, " " + clean_text(str(row['Operador'])[:28]), 'B')
-                    pdf.cell(100, 5, " " + clean_text(maq_str[:55]), 'B')
-                else:
-                    pdf.cell(100, 5, " " + clean_text(str(row['Operador'])[:50]), 'B')
-                    pdf.cell(60, 5, " " + clean_text(str(row['Fábrica'])[:30]), 'B')
+                maq_str = str(row.get('Maquinas', '-'))
+                pdf.cell(50, 5, " " + clean_text(str(row['Operador'])[:28]), 'B')
+                pdf.cell(35, 5, " " + clean_text(str(row['Fábrica'])[:18]), 'B')
+                pdf.cell(85, 5, " " + clean_text(maq_str[:50]), 'B')
                     
                 if perf_val >= 90: pdf.set_text_color(33, 195, 84)
                 elif perf_val >= 80: pdf.set_text_color(200, 150, 0)
                 else: pdf.set_text_color(220, 20, 20)
-                pdf.cell(30, 5, f"{perf_val}%", 'B', 1, 'C'); pdf.set_text_color(50, 50, 50)
+                pdf.cell(20, 5, f"{perf_val}%", 'B', 1, 'C'); pdf.set_text_color(50, 50, 50)
             pdf.ln(5)
     else:
         pdf.set_font("Arial", 'I', 10); pdf.cell(0, 10, clean_text("No hay datos de performance registrados para esta área en este período."), ln=True)
