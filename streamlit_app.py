@@ -155,7 +155,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
             
-            # Consulta ORIGINAL oficial diaria (Sin cruce con CellId para no romper SQL)
+            # Consulta ORIGINAL oficial diaria
             q_op = f"""
                 SELECT op.Name as Operador, p.Factory as Fábrica,
                        p.Performance, p.ProductiveTime
@@ -711,9 +711,42 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         for _, r in df_horarios.iterrows():
                             if pdf.get_y() > 265: 
                                 pdf.add_page(); dibujar_cabeza_hora(); setup_table_row(pdf); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
-                            pdf.cell(35, 5, " " + clean_text(str(r['Máquina'])[:15]), 1, 0, 'L'); pdf.cell(15, 5, clean_text(str(r['Turno'])), 1, 0, 'C')
-                            pdf.cell(25, 5, clean_text(mins_to_time_str(r['Inicio'])), 1, 0, 'C'); pdf.cell(25, 5, clean_text(mins_to_time_str(r['Fin'])), 1, 0, 'C')
-                            pdf.cell(45, 5, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C'); pdf.cell(45, 5, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
+                            
+                            # --- LÓGICA DE COLORES HORA DE INICIO ---
+                            h_i = r['Inicio']
+                            bg_i = (255, 255, 255); tx_i = (0, 0, 0)
+                            if pd.notna(h_i):
+                                if 360 <= h_i < 375: bg_i = (33, 195, 84); tx_i = (255, 255, 255)     # Verde 6:00-6:15
+                                elif 375 <= h_i < 380: bg_i = (255, 235, 59); tx_i = (0, 0, 0)        # Amarillo 6:15-6:20
+                                elif 380 <= h_i < 420: bg_i = (220, 20, 20); tx_i = (255, 255, 255)   # Rojo 6:20-7:00
+                                elif h_i >= 420: bg_i = (155, 89, 182); tx_i = (255, 255, 255)        # Violeta 7:00+
+
+                            # --- LÓGICA DE COLORES HORA DE CIERRE ---
+                            h_f = r['Fin']
+                            bg_f = (255, 255, 255); tx_f = (0, 0, 0)
+                            turno_str = str(r['Turno']).strip().upper()
+                            if turno_str in ['A', 'TURNO A', '1', 'MAÑANA'] and pd.notna(h_f):
+                                if 810 <= h_f < 840: bg_f = (220, 20, 20); tx_f = (255, 255, 255)     # Rojo 13:30-14:00
+                                elif 840 <= h_f < 849: bg_f = (255, 235, 59); tx_f = (0, 0, 0)        # Amarillo 14:00-14:09
+                                elif 849 <= h_f <= 858: bg_f = (33, 195, 84); tx_f = (255, 255, 255)  # Verde 14:09-14:18
+
+                            # --- DIBUJO DE CELDAS ---
+                            pdf.set_fill_color(255, 255, 255); pdf.set_text_color(0, 0, 0)
+                            pdf.cell(35, 5, " " + clean_text(str(r['Máquina'])[:15]), 1, 0, 'L')
+                            pdf.cell(15, 5, clean_text(str(r['Turno'])), 1, 0, 'C')
+                            
+                            # Hora Inicio
+                            pdf.set_fill_color(*bg_i); pdf.set_text_color(*tx_i); pdf.set_font("Arial", 'B', 8)
+                            pdf.cell(25, 5, clean_text(mins_to_time_str(h_i)), 1, 0, 'C', True)
+                            
+                            # Hora Cierre
+                            pdf.set_fill_color(*bg_f); pdf.set_text_color(*tx_f); pdf.set_font("Arial", 'B', 8)
+                            pdf.cell(25, 5, clean_text(mins_to_time_str(h_f)), 1, 0, 'C', True)
+                            
+                            # Resto
+                            pdf.set_fill_color(255, 255, 255); pdf.set_text_color(0, 0, 0); pdf.set_font("Arial", '', 8)
+                            pdf.cell(45, 5, clean_text(mins_to_duration_str(r['Total'])), 1, 0, 'C')
+                            pdf.cell(45, 5, clean_text(mins_to_duration_str(r['NoReg'])), 1, 1, 'C')
                         pdf.ln(5)
                 else:
                     df_pdf_g_horarios['Fecha_DT'] = pd.to_datetime(df_pdf_g_horarios['Fecha_Filtro'])
