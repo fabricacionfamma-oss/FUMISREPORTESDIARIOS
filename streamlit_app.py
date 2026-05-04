@@ -106,7 +106,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
 
-            # Consulta ORIGINAL oficial mensual
             q_op = f"""
                 SELECT DISTINCT op.Name as Operador, p.Factory as Fábrica, 
                        (SUM(p.Performance * p.ProductiveTime) OVER(PARTITION BY p.OperatorId) / NULLIF(SUM(p.ProductiveTime) OVER(PARTITION BY p.OperatorId), 0)) as PERFORMANCE, 
@@ -155,7 +154,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 GROUP BY c.Name
             """
             
-            # Consulta ORIGINAL oficial diaria
             q_op = f"""
                 SELECT op.Name as Operador, p.Factory as Fábrica,
                        p.Performance, p.ProductiveTime
@@ -374,10 +372,13 @@ def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
 # ==========================================
 def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
     theme_color = (44, 62, 80) 
-    pdf = ReportePDF("GLOBAL PLANTA", fecha_str, theme_color)
+    pdf = ReportePDF("GLOBAL PLANTA - RESUMEN MENSUAL", fecha_str, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
     
+    # ---------------------------------------------------------
+    # PAGINA 1: RESUMEN EJECUTIVO POR PLANTA (GLOBAL)
+    # ---------------------------------------------------------
+    pdf.add_page()
     print_section_title(pdf, "RESUMEN EJECUTIVO: KPI POR PLANTA", theme_color)
 
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
@@ -396,6 +397,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
         df_met_all['CALIDAD'] = df_met_all['CALIDAD'] / 100.0
 
     df_met_all['Planta'] = df_met_all['Máquina'].apply(get_planta)
+    df_met_all['Grupo'] = df_met_all['Máquina'].apply(lambda x: mapa_limpio.get(str(x).strip().upper(), 'OTRO'))
     
     df_met_all['T_Planificado'] = df_met_all['T_Operativo'].fillna(0) + df_met_all['T_Parada'].fillna(0)
     df_met_all['Piezas_Totales'] = df_met_all['Buenas'].fillna(0) + df_met_all['Retrabajo'].fillna(0) + df_met_all['Observadas'].fillna(0)
@@ -407,9 +409,9 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
 
     met_planta = df_met_all.groupby('Planta')[['OEE_Num', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Planificado', 'T_Operativo', 'Piezas_Totales']].sum()
 
-    def calc_metrics(p_name):
-        if p_name in met_planta.index:
-            row = met_planta.loc[p_name]
+    def calc_metrics(df_grp, idx_name):
+        if idx_name in df_grp.index:
+            row = df_grp.loc[idx_name]
             oee = row['OEE_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
             disp = row['Disp_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
             perf = row['Perf_Num'] / row['T_Operativo'] if row['T_Operativo'] > 0 else 0
@@ -417,8 +419,8 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
             return oee, disp, perf, cal
         return 0, 0, 0, 0
 
-    oee_est, disp_est, perf_est, cal_est = calc_metrics('ESTAMPADO')
-    oee_sol, disp_sol, perf_sol, cal_sol = calc_metrics('SOLDADURA')
+    oee_est, disp_est, perf_est, cal_est = calc_metrics(met_planta, 'ESTAMPADO')
+    oee_sol, disp_sol, perf_sol, cal_sol = calc_metrics(met_planta, 'SOLDADURA')
 
     def draw_kpi_row(y, title, oee, disp, perf, cal):
         pdf.set_xy(10, y)
@@ -453,10 +455,12 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
     y_curr += 8
     y_curr = draw_kpi_row(y_curr, "INDICADORES: SOLDADURA", oee_sol, disp_sol, perf_sol, cal_sol)
 
+    meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+
     if not df_trend.empty:
         pdf.set_y(y_curr + 10)
         pdf.set_font("Arial", 'B', 12); pdf.set_text_color(*theme_color)
-        pdf.cell(0, 6, clean_text("Evolución Mensual Histórica (4 Indicadores por Planta)"), ln=True)
+        pdf.cell(0, 6, clean_text("Evolución Mensual Histórica por Planta"), ln=True)
 
         df_trend_all = df_trend.copy()
         df_trend_all['Planta'] = df_trend_all['Máquina'].apply(get_planta)
@@ -473,7 +477,6 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
         if trend_melt['Valor'].max() <= 1.5 and trend_melt['Valor'].max() > 0:
             trend_melt['Valor'] = trend_melt['Valor'] * 100
 
-        meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
         trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
 
         fig_glob = px.bar(
@@ -493,11 +496,82 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
             add_image_safe(pdf, tmp_glob.name, w_mm=190, h_mm=115, center=True)
             os.remove(tmp_glob.name)
 
+    # ---------------------------------------------------------
+    # PAGINA 2: OEE CONSOLIDADO POR GRUPOS
+    # ---------------------------------------------------------
+    pdf.add_page()
+    print_section_title(pdf, "RESUMEN EJECUTIVO: OEE POR GRUPO", theme_color)
+    
+    met_grupo = df_met_all.groupby('Grupo')[['OEE_Num', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Planificado', 'T_Operativo', 'Piezas_Totales']].sum()
+    
+    y_curr = pdf.get_y() + 5
+    for g in GRUPOS_ESTAMPADO + GRUPOS_SOLDADURA:
+        if g in met_grupo.index:
+            if y_curr > 230:
+                pdf.add_page()
+                print_section_title(pdf, "RESUMEN EJECUTIVO: OEE POR GRUPO (Cont.)", theme_color)
+                y_curr = pdf.get_y() + 5
+                
+            oee_g, disp_g, perf_g, cal_g = calc_metrics(met_grupo, g)
+            y_curr = draw_kpi_row(y_curr, f"GRUPO: {g}", oee_g, disp_g, perf_g, cal_g)
+            y_curr += 8
+
+    # ---------------------------------------------------------
+    # PAGINAS 3..N : OEE Y GRÁFICA INDIVIDUAL POR MÁQUINA
+    # ---------------------------------------------------------
+    for g in GRUPOS_ESTAMPADO + GRUPOS_SOLDADURA:
+        maquinas_grupo = sorted(df_met_all[df_met_all['Grupo'] == g]['Máquina'].unique())
+        for maq in maquinas_grupo:
+            pdf.add_page() # <-- FUERZA CADA MÁQUINA EN UNA PÁGINA NUEVA
+            pdf.set_font("Times", 'B', 16)
+            pdf.set_text_color(*theme_color)
+            pdf.cell(0, 10, clean_text(f"REPORTE ESPECÍFICO DE MÁQUINA: {maq}"), ln=True, border='B')
+            
+            pdf.set_font("Arial", 'I', 10); pdf.set_text_color(100, 100, 100)
+            pdf.cell(0, 6, clean_text(f"Grupo perteneciente: {g}"), ln=True)
+            pdf.ln(5)
+            
+            row_maq = df_met_all[df_met_all['Máquina'] == maq].iloc[0]
+            y_curr = draw_kpi_row(pdf.get_y(), "INDICADORES DEL MES", row_maq['OEE'], row_maq['DISPONIBILIDAD'], row_maq['PERFORMANCE'], row_maq['CALIDAD'])
+            
+            # Gráfico de tendencia mensual de la máquina
+            if not df_trend.empty:
+                df_t_maq = df_trend[df_trend['Máquina'] == maq].copy()
+                if not df_t_maq.empty:
+                    df_t_maq['OEE'] = (df_t_maq['OEE_Num'] / df_t_maq['OEE_Den']).fillna(0)
+                    df_t_maq['DISP'] = (df_t_maq['Disp_Num'] / df_t_maq['OEE_Den']).fillna(0)
+                    df_t_maq['PERF'] = (df_t_maq['Perf_Num'] / df_t_maq['T_Operativo']).fillna(0)
+                    df_t_maq['CAL'] = (df_t_maq['Cal_Num'] / df_t_maq['Piezas_Totales']).fillna(0)
+                    
+                    df_t_maq_melt = df_t_maq.melt(id_vars=['Month'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
+                    if df_t_maq_melt['Valor'].max() <= 1.5 and df_t_maq_melt['Valor'].max() > 0:
+                        df_t_maq_melt['Valor'] = df_t_maq_melt['Valor'] * 100
+                        
+                    df_t_maq_melt['Mes_Nombre'] = df_t_maq_melt['Month'].map(meses_map)
+                    
+                    fig_m = px.bar(
+                        df_t_maq_melt, x='Mes_Nombre', y='Valor', color='Indicador',
+                        barmode='group', text_auto='.0f',
+                        color_discrete_map={'OEE': '#2C3E50', 'DISP': '#2980B9', 'PERF': '#F39C12', 'CAL': '#27AE60'}
+                    )
+                    fig_m.update_layout(
+                        height=350, width=700, margin=dict(t=30, b=20, l=20, r=20),
+                        yaxis_title='Porcentaje (%)', xaxis_title='', title=f'Evolución Mensual - {maq}',
+                        plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    fig_m.update_yaxes(range=[0, 110])
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_m:
+                        fig_m.write_image(tmp_m.name, engine="kaleido")
+                        pdf.set_y(y_curr + 15)
+                        add_image_safe(pdf, tmp_m.name, w_mm=170, h_mm=85, center=True)
+                        os.remove(tmp_m.name)
+
     return pdf.output(dest='S').encode('latin-1')
 
 
 # ==========================================
-# 5.B. MOTOR GENERADOR DEL PDF PRINCIPAL
+# 5.B. MOTOR GENERADOR DEL PDF PRINCIPAL (Detallado)
 # ==========================================
 def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf):
     if area.upper() == "ESTAMPADO":
@@ -791,7 +865,11 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         if maquinas_con_tiempo:
             pdf.ln(5)
             for maq in maquinas_con_tiempo:
-                check_space(pdf, 50)
+                # GARANTIZA QUE CADA MÁQUINA VAYA EN SU PROPIA PÁGINA EN EL REPORTE MENSUAL DETALLADO
+                if p_tipo == "Mensual":
+                    pdf.add_page()
+                else:
+                    check_space(pdf, 50)
                 
                 df_maq = df_pdf_g[df_pdf_g['Máquina'] == maq]
                 t_prod = df_maq[df_maq['Estado_Global'] == 'Producción']['Tiempo (Min)'].sum()
