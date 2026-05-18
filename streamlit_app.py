@@ -784,7 +784,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de evolución para graficar en este periodo."), ln=True)
         
-       else: # Semanal o Diario
+        else: # Semanal o Diario
             check_space(pdf, 80)
             print_section_title(pdf, f"2. Comparativa de KPIs entre Máquinas ({p_tipo})", theme_color)
             
@@ -816,7 +816,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 pdf.set_y(y_base + 90); pdf.ln(2)
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de KPIs para graficar en este periodo."), ln=True)
-                
+
         # 3. HORARIOS (SOLO DIARIO/SEMANAL)
         if p_tipo in ["Diario", "Semanal"]:
             check_space(pdf, 25); print_section_title(pdf, "3. Horarios y Tiempo de Apertura", theme_color)
