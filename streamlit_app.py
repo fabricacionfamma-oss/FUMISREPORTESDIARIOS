@@ -784,9 +784,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de evolución para graficar en este periodo."), ln=True)
         
-        else: # Semanal o Diario
+       else: # Semanal o Diario
             check_space(pdf, 80)
-            print_section_title(pdf, f"2. Resumen de KPIs por Máquina ({p_tipo})", theme_color)
+            print_section_title(pdf, f"2. Comparativa de KPIs entre Máquinas ({p_tipo})", theme_color)
             
             df_m_g = df_metrics_pdf[df_metrics_pdf['Máquina'].isin(maq_del_grupo)].copy()
             if not df_m_g.empty:
@@ -794,16 +794,17 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if df_m_g_melt['Valor'].max() <= 1.5 and df_m_g_melt['Valor'].max() > 0:
                     df_m_g_melt['Valor'] = df_m_g_melt['Valor'] * 100
                 
+                # --- CAMBIO APLICADO: Eje X = Indicador, Color = Máquina ---
                 fig_kpis = px.bar(
-                    df_m_g_melt, x='Máquina', y='Valor', color='Indicador', 
+                    df_m_g_melt, x='Indicador', y='Valor', color='Máquina', 
                     barmode='group', text_auto='.1f',
-                    color_discrete_map={'OEE': '#2C3E50', 'DISPONIBILIDAD': '#2980B9', 'PERFORMANCE': '#F39C12', 'CALIDAD': '#27AE60'}
+                    color_discrete_sequence=px.colors.qualitative.Prism
                 )
                 fig_kpis.update_layout(
                     height=350, width=800, margin=dict(t=20, b=20, l=20, r=20),
                     yaxis_title='Porcentaje (%)', xaxis_title='', 
                     plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(range=[0, 110]),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title="")
                 )
                 
                 y_base = pdf.get_y()
@@ -815,7 +816,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 pdf.set_y(y_base + 90); pdf.ln(2)
             else:
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de KPIs para graficar en este periodo."), ln=True)
-
+                
         # 3. HORARIOS (SOLO DIARIO/SEMANAL)
         if p_tipo in ["Diario", "Semanal"]:
             check_space(pdf, 25); print_section_title(pdf, "3. Horarios y Tiempo de Apertura", theme_color)
