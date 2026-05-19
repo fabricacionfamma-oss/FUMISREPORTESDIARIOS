@@ -229,7 +229,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({'Operador': lambda x: ' / '.join(x.unique())}).reset_index()
 
             def categorizar_estado(row):
-                texto_completo = f"{row.get('Nivel Evento 1','')} {row.get('Nivel Evento 2','')} {row.get('Nivel Evento 3','')} {row.get('Nivel Evento 4','')} ".upper()
+                texto_completo = f"{row.get('Nivel Evento 1','')}\n{row.get('Nivel Evento 2','')}\n{row.get('Nivel Evento 3','')}\n{row.get('Nivel Evento 4','')} ".upper()
                 if 'PRODUCCION' in texto_completo or 'PRODUCCIÓN' in texto_completo: return 'Producción'
                 if 'PROYECTO' in texto_completo: return 'Proyecto'
                 if 'BAÑO' in texto_completo or 'BANO' in texto_completo or 'REFRIGERIO' in texto_completo: return 'Descanso'
@@ -423,11 +423,6 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
         return 'OTRO'
 
     df_met_all = df_metrics_pdf.copy()
-    if not df_met_all.empty and df_met_all['OEE'].max() > 1.5:
-        df_met_all['OEE'] = df_met_all['OEE'] / 100.0
-        df_met_all['DISPONIBILIDAD'] = df_met_all['DISPONIBILIDAD'] / 100.0
-        df_met_all['PERFORMANCE'] = df_met_all['PERFORMANCE'] / 100.0
-        df_met_all['CALIDAD'] = df_met_all['CALIDAD'] / 100.0
 
     df_met_all['Planta'] = df_met_all['Máquina'].apply(get_planta)
     df_met_all['Grupo'] = df_met_all['Máquina'].apply(lambda x: mapa_limpio.get(str(x).strip().upper(), 'OTRO'))
@@ -507,8 +502,8 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
 
         trend_melt = trend_planta.melt(id_vars=['Month', 'Planta'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
         
-        if trend_melt['Valor'].max() <= 1.5 and trend_melt['Valor'].max() > 0:
-            trend_melt['Valor'] = trend_melt['Valor'] * 100
+        # SIEMPRE multiplicamos por 100 para la gráfica
+        trend_melt['Valor'] = trend_melt['Valor'] * 100
 
         trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
 
@@ -576,8 +571,9 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
                     df_t_maq['CAL'] = (df_t_maq['Cal_Num'] / df_t_maq['Piezas_Totales']).fillna(0)
                     
                     df_t_maq_melt = df_t_maq.melt(id_vars=['Month'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
-                    if df_t_maq_melt['Valor'].max() <= 1.5 and df_t_maq_melt['Valor'].max() > 0:
-                        df_t_maq_melt['Valor'] = df_t_maq_melt['Valor'] * 100
+                    
+                    # SIEMPRE multiplicamos por 100 para la gráfica
+                    df_t_maq_melt['Valor'] = df_t_maq_melt['Valor'] * 100
                         
                     df_t_maq_melt['Mes_Nombre'] = df_t_maq_melt['Month'].map(meses_map)
                     
@@ -617,12 +613,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         
     hex_theme = '#%02x%02x%02x' % theme_color; hex_comp = '#%02x%02x%02x' % comp_color  
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
-
-    if not df_metrics_pdf.empty and df_metrics_pdf['OEE'].max() > 1.5:
-        df_metrics_pdf['OEE'] = df_metrics_pdf['OEE'] / 100.0
-        df_metrics_pdf['DISPONIBILIDAD'] = df_metrics_pdf['DISPONIBILIDAD'] / 100.0
-        df_metrics_pdf['PERFORMANCE'] = df_metrics_pdf['PERFORMANCE'] / 100.0
-        df_metrics_pdf['CALIDAD'] = df_metrics_pdf['CALIDAD'] / 100.0
 
     df_pdf = pd.DataFrame(columns=['Máquina', 'Fábrica', 'Estado_Global', 'Tiempo (Min)', 'Operador'])
     if not df_pdf_raw.empty:
@@ -756,8 +746,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             if not df_trend.empty:
                 df_trend_g = df_trend[df_trend['Máquina'].isin(maq_del_grupo)].copy()
                 if not df_trend_g.empty:
-                    if df_trend_g['OEE'].max() <= 1.5:
-                        df_trend_g['OEE'] = df_trend_g['OEE'] * 100
+                    
+                    # SIEMPRE multiplicar por 100
+                    df_trend_g['OEE'] = df_trend_g['OEE'] * 100
                     
                     meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
                     df_trend_g['Mes_Nombre'] = df_trend_g['Month'].map(meses_map)
@@ -791,8 +782,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             df_m_g = df_metrics_pdf[df_metrics_pdf['Máquina'].isin(maq_del_grupo)].copy()
             if not df_m_g.empty:
                 df_m_g_melt = df_m_g.melt(id_vars=['Máquina'], value_vars=['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD'], var_name='Indicador', value_name='Valor')
-                if df_m_g_melt['Valor'].max() <= 1.5 and df_m_g_melt['Valor'].max() > 0:
-                    df_m_g_melt['Valor'] = df_m_g_melt['Valor'] * 100
+                
+                # SIEMPRE multiplicar por 100
+                df_m_g_melt['Valor'] = df_m_g_melt['Valor'] * 100
                 
                 # --- CAMBIO APLICADO: Eje X = Indicador, Color = Máquina ---
                 fig_kpis = px.bar(
