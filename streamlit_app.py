@@ -719,10 +719,12 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 g_perf_w += metrics['PERFORMANCE'] * t_o
                 g_oee_w += metrics['OEE'] * t_p
                 
+        # ==== CORRECCIÓN APLICADA AQUÍ ====
         g_disp = g_disp_w / g_plan if g_plan > 0 else 0
         g_perf = g_perf_w / g_op if g_op > 0 else 0
-        g_cal = g_buenas / g_totales if g_totales > 0 else 0
-        g_oee = g_disp * g_perf * g_cal
+        g_cal = (g_buenas / g_totales) * 100 if g_totales > 0 else 0 
+        g_oee = g_oee_w / g_plan if g_plan > 0 else 0 
+        # ==================================
         
         m_g = {'OEE': g_oee, 'DISPONIBILIDAD': g_disp, 'PERFORMANCE': g_perf, 'CALIDAD': g_cal}
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
