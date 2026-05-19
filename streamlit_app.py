@@ -362,13 +362,14 @@ def setup_table_row(pdf):
     pdf.set_fill_color(255, 255, 255); pdf.set_text_color(50, 50, 50); pdf.set_draw_color(200, 200, 200)
 
 def set_pdf_color_metric(pdf, val, metric_name):
+    # Ya que los datos entran en escala 0-100+, los targets también deben estar en escala 0-100+
     targets = {
-        'OEE': 0.75,
-        'DISPONIBILIDAD': 0.88,
-        'PERFORMANCE': 0.90,
-        'CALIDAD': 0.95
+        'OEE': 75.0,
+        'DISPONIBILIDAD': 88.0,
+        'PERFORMANCE': 90.0,
+        'CALIDAD': 95.0
     }
-    target = targets.get(metric_name.upper(), 0.85)
+    target = targets.get(metric_name.upper(), 85.0)
     
     if val >= target:
         pdf.set_text_color(33, 195, 84) # Verde
@@ -378,16 +379,16 @@ def set_pdf_color_metric(pdf, val, metric_name):
 def print_pdf_metric_row(pdf, prefix, m):
     pdf.set_font("Arial", 'B', 10); pdf.set_text_color(0, 0, 0)
     pdf.write(7, clean_text(f"{prefix} | OEE: "))
-    set_pdf_color_metric(pdf, m.get('OEE', 0), 'OEE'); pdf.write(7, f"{m.get('OEE', 0):.1%}")
+    set_pdf_color_metric(pdf, m.get('OEE', 0), 'OEE'); pdf.write(7, f"{m.get('OEE', 0):.1f}%")
     
     pdf.set_text_color(0, 0, 0); pdf.write(7, clean_text("  |  Disp: "))
-    set_pdf_color_metric(pdf, m.get('DISPONIBILIDAD', 0), 'DISPONIBILIDAD'); pdf.write(7, f"{m.get('DISPONIBILIDAD', 0):.1%}")
+    set_pdf_color_metric(pdf, m.get('DISPONIBILIDAD', 0), 'DISPONIBILIDAD'); pdf.write(7, f"{m.get('DISPONIBILIDAD', 0):.1f}%")
     
     pdf.set_text_color(0, 0, 0); pdf.write(7, clean_text("  |  Perf: "))
-    set_pdf_color_metric(pdf, m.get('PERFORMANCE', 0), 'PERFORMANCE'); pdf.write(7, f"{m.get('PERFORMANCE', 0):.1%}")
+    set_pdf_color_metric(pdf, m.get('PERFORMANCE', 0), 'PERFORMANCE'); pdf.write(7, f"{m.get('PERFORMANCE', 0):.1f}%")
     
     pdf.set_text_color(0, 0, 0); pdf.write(7, clean_text("  |  Cal: "))
-    set_pdf_color_metric(pdf, m.get('CALIDAD', 0), 'CALIDAD'); pdf.write(7, f"{m.get('CALIDAD', 0):.1%}")
+    set_pdf_color_metric(pdf, m.get('CALIDAD', 0), 'CALIDAD'); pdf.write(7, f"{m.get('CALIDAD', 0):.1f}%")
     
     pdf.set_text_color(0, 0, 0); pdf.ln(7)
 
@@ -469,7 +470,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
             pdf.set_fill_color(245, 245, 245)
             set_pdf_color_metric(pdf, val, title_box)
             pdf.set_font("Arial", 'B', 16)
-            pdf.cell(w, 12, f"{val*100:.1f}%", border=1, align='C', fill=True)
+            pdf.cell(w, 12, f"{val:.1f}%", border=1, align='C', fill=True)
         
         draw_box(x_start, "OEE", oee)
         draw_box(x_start + w + spacing, "DISPONIBILIDAD", disp)
@@ -501,10 +502,6 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
         trend_planta['CAL'] = (trend_planta['Cal_Num'] / trend_planta['Piezas_Totales']).fillna(0)
 
         trend_melt = trend_planta.melt(id_vars=['Month', 'Planta'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
-        
-        # SIEMPRE multiplicamos por 100 para la gráfica
-        trend_melt['Valor'] = trend_melt['Valor'] * 100
-
         trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
 
         fig_glob = px.bar(
@@ -517,7 +514,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
             yaxis_title='Porcentaje (%)', xaxis_title='',
             plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        fig_glob.update_yaxes(range=[0, 110])
+        fig_glob.update_yaxes(rangemode="tozero")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_glob:
             fig_glob.write_image(tmp_glob.name, engine="kaleido")
@@ -571,10 +568,6 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
                     df_t_maq['CAL'] = (df_t_maq['Cal_Num'] / df_t_maq['Piezas_Totales']).fillna(0)
                     
                     df_t_maq_melt = df_t_maq.melt(id_vars=['Month'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
-                    
-                    # SIEMPRE multiplicamos por 100 para la gráfica
-                    df_t_maq_melt['Valor'] = df_t_maq_melt['Valor'] * 100
-                        
                     df_t_maq_melt['Mes_Nombre'] = df_t_maq_melt['Month'].map(meses_map)
                     
                     fig_m = px.bar(
@@ -587,7 +580,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
                         yaxis_title='Porcentaje (%)', xaxis_title='', title=f'Evolución Mensual - {maq}',
                         plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-                    fig_m.update_yaxes(range=[0, 110])
+                    fig_m.update_yaxes(rangemode="tozero")
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_m:
                         fig_m.write_image(tmp_m.name, engine="kaleido")
@@ -747,9 +740,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 df_trend_g = df_trend[df_trend['Máquina'].isin(maq_del_grupo)].copy()
                 if not df_trend_g.empty:
                     
-                    # SIEMPRE multiplicar por 100
-                    df_trend_g['OEE'] = df_trend_g['OEE'] * 100
-                    
                     meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
                     df_trend_g['Mes_Nombre'] = df_trend_g['Month'].map(meses_map)
                     
@@ -760,8 +750,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                     fig_trend_oee.update_layout(
                         height=350, width=800, margin=dict(t=20, b=20, l=20, r=20),
                         yaxis_title='OEE (%)', xaxis_title='', legend_title='Máquinas', 
-                        plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(range=[0, 110])
+                        plot_bgcolor='rgba(0,0,0,0)'
                     )
+                    fig_trend_oee.update_yaxes(rangemode="tozero")
                     
                     y_base = pdf.get_y()
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_oee:
@@ -783,9 +774,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             if not df_m_g.empty:
                 df_m_g_melt = df_m_g.melt(id_vars=['Máquina'], value_vars=['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD'], var_name='Indicador', value_name='Valor')
                 
-                # SIEMPRE multiplicar por 100
-                df_m_g_melt['Valor'] = df_m_g_melt['Valor'] * 100
-                
                 # --- CAMBIO APLICADO: Eje X = Indicador, Color = Máquina ---
                 fig_kpis = px.bar(
                     df_m_g_melt, x='Indicador', y='Valor', color='Máquina', 
@@ -795,9 +783,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 fig_kpis.update_layout(
                     height=350, width=800, margin=dict(t=20, b=20, l=20, r=20),
                     yaxis_title='Porcentaje (%)', xaxis_title='', 
-                    plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(range=[0, 110]),
+                    plot_bgcolor='rgba(0,0,0,0)',
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title="")
                 )
+                fig_kpis.update_yaxes(rangemode="tozero")
                 
                 y_base = pdf.get_y()
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_kpi:
