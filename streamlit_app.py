@@ -5,8 +5,14 @@ import plotly.graph_objects as go
 import tempfile
 import os
 import calendar
+import io
 from fpdf import FPDF
 from datetime import timedelta
+
+# ==========================================
+# REQUISITO PARA IMÁGENES PNG (Kaleido)
+# Asegúrate de tener instalado en tu entorno: pip install kaleido==0.2.1
+# ==========================================
 
 # ==========================================
 # 0. DICCIONARIO DE MÁQUINAS Y GRUPOS FUMISCOR
@@ -1393,9 +1399,105 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
 
     return pdf.output(dest='S').encode('latin-1')
 
+# =========================================================================
+# MÓDULO: GENERADOR DE IMAGEN PNG PARA OPLs
+# =========================================================================
+st.divider()
+
+with st.expander("🚨 Generar Imagen de Registro de Calidad / OPLs (PNG)"):
+    st.markdown("Copia la tabla de OPLs desde tu Excel (incluyendo encabezados) y pégala aquí. Se generará una imagen horizontal. Las filas correspondientes al **día hábil anterior** se pintarán en rojo.")
+    
+    datos_pegados = st.text_area("Pega aquí los datos de OPL:", height=150, key="txt_opl")
+    
+    if datos_pegados:
+        try:
+            # 1. Leer los datos del portapapeles
+            df_opl = pd.read_csv(io.StringIO(datos_pegados), sep='\t', dtype=str)
+            df_opl.columns = df_opl.columns.str.strip()
+            
+            # 2. Limpiar símbolos raros de la tabla dinámica (ej. ⊟, +, -)
+            for col in df_opl.columns:
+                df_opl[col] = df_opl[col].astype(str).str.replace('⊟', '', regex=False).str.strip()
+                df_opl[col] = df_opl[col].replace('nan', '')
+
+            # 3. Determinar la "Fecha Objetivo" (Ayer, o Viernes si hoy es Lunes)
+            hoy = pd.to_datetime("today").normalize()
+            if hoy.weekday() == 0:  # 0 = Lunes
+                fecha_objetivo = hoy - timedelta(days=3)  # Retrocede a Viernes
+            else:
+                fecha_objetivo = hoy - timedelta(days=1)  # Retrocede a Ayer
+                
+            fecha_obj_str = fecha_objetivo.strftime('%d/%m/%Y')
+            
+            # 4. Encontrar la columna de fechas para aplicar el color
+            col_fecha = next((c for c in df_opl.columns if 'fecha' in c.lower()), None)
+            
+            row_colors = []
+            if col_fecha:
+                fechas_parsed = pd.to_datetime(df_opl[col_fecha], dayfirst=True, errors='coerce')
+                for fecha in fechas_parsed:
+                    if pd.notna(fecha) and fecha == fecha_objetivo:
+                        row_colors.append('#FFCDD2') 
+                    else:
+                        row_colors.append('#F8F9F9') 
+            else:
+                row_colors = ['#F8F9F9'] * len(df_opl)
+
+            # 5. Armar la tabla como Imagen (Plotly)
+            num_filas = len(df_opl)
+            
+            fig_opl = go.Figure(data=[go.Table(
+                header=dict(
+                    values=list(df_opl.columns),
+                    fill_color='#2C3E50',
+                    font=dict(color='white', size=13, family="Arial"),
+                    align='center',
+                    height=30
+                ),
+                cells=dict(
+                    values=[df_opl[col] for col in df_opl.columns],
+                    fill_color=[row_colors] * len(df_opl.columns),
+                    font=dict(color='black', size=11, family="Arial"),
+                    align='left',
+                    height=25
+                )
+            )])
+            
+            fig_opl.update_layout(
+                title=dict(
+                    text=f"<b>Registro Acumulado de Alertas de Calidad (OPL)</b><br><sup>Total de registros: {num_filas} | En rojo: Novedades del día hábil anterior ({fecha_obj_str})</sup>",
+                    font=dict(size=20, color="#1F2937")
+                ),
+                margin=dict(t=90, b=20, l=20, r=20),
+                width=1300, 
+                height=200 + (num_filas * 35) # Ajuste dinámico de altura corregido
+            )
+            
+            st.success(f"¡Tabla procesada! Se detectaron {num_filas} OPLs. Fecha a resaltar: {fecha_obj_str}")
+            
+            # Transformamos la figura en imagen de Alta Resolución (scale=2)
+            img_bytes = fig_opl.to_image(format="png", engine="kaleido", scale=2)
+            
+            # Mostramos una previsualización en la web
+            st.image(img_bytes, use_container_width=True)
+            
+            # Botón de descarga exclusivo
+            st.download_button(
+                label="📥 Descargar Imagen de OPLs (PNG)",
+                data=img_bytes,
+                file_name=f"OPLs_Acumulado_{hoy.strftime('%Y%m%d')}.png",
+                mime="image/png",
+                use_container_width=True
+            )
+            
+        except Exception as e:
+            st.error(f"Error procesando los datos. Asegúrate de copiar bien la tabla desde los encabezados. Detalle: {e}")
+
 # ==========================================
 # 6. BOTONES DE EXPORTACIÓN EN PANTALLA
 # ==========================================
+st.divider()
+
 with col_p3:
     st.write("**3. Generar y Descargar:**")
     
