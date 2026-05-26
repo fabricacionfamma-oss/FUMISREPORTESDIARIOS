@@ -907,6 +907,8 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay horarios registrados para generar estadísticas en este bloque."), ln=True)
 
         # 4. RESUMEN GENERAL DE TIEMPOS DEL GRUPO
+        # (Se agrupa en la misma hoja si queda espacio, sino el check_space se encarga)
+        check_space(pdf, 30)
         num_section_tiempos = "3." if p_tipo == "Mensual" else "4."
         print_section_title(pdf, f"{num_section_tiempos} Resumen General del Grupo (Tiempos Consolidados)", theme_color)
         
@@ -933,7 +935,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         # REQUISITO ADICIONAL: LOS GRÁFICOS DE FALLA, TENDENCIA Y TORTAS 
         # SE DESPLAZAN OBLIGATORIAMENTE A UNA NUEVA HOJA EXCLUSIVA
         # -----------------------------------------------------------------
-        pdf.add_page()
+        check_space(pdf, 170) # En vez de forzar una hoja en blanco, evalúa si entran juntos
         print_section_title(pdf, "Análisis de Fallas, Tendencias y Estructura Visual", theme_color)
 
         # --- Desglose de Fallas del Grupo ---
@@ -1025,7 +1027,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
 
         if maquinas_con_tiempo:
             # Control dinámico: si no entra el encabezado y al menos 1 máquina, salta automáticamente
-            check_space(pdf, 35)
+            check_space(pdf, 40)
             pdf.set_link(links_detalle_grupo[g])
             print_section_title(pdf, f"Cuadro Resumen por Máquinas - Grupo {g}", theme_color)
 
@@ -1317,6 +1319,195 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     agregar_tabla_tiempos("Tiempo de Refrigerio Acumulado", ["REFRIGERIO"], limite_minutos=17)
 
     return pdf.output(dest='S').encode('latin-1')
+
+# =========================================================================
+# MÓDULO: GENERADOR DE REPORTE INTEGRAL OPL (DASHBOARD + PNG)
+# =========================================================================
+st.divider()
+with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", expanded=True):
+    st.markdown("Pega aquí los datos de OPL del Excel para generar un reporte visual completo con KPIs, gráfico de tendencia y tabla detallada.")
+    datos_pegados = st.text_area("Pestaña Datos OPL (incluir encabezados):", height=120, key="txt_opl")
+    
+    if datos_pegados:
+        try:
+            with st.spinner("Procesando datos y generando dashboard visual..."):
+                # 1. Procesamiento de datos
+                df_opl = pd.read_csv(io.StringIO(datos_pegados), sep='\t', dtype=str)
+                df_opl.columns = df_opl.columns.str.strip()
+                for col in df_opl.columns:
+                    df_opl[col] = df_opl[col].astype(str).str.replace('⊟', '', regex=False).str.strip()
+                    df_opl[col] = df_opl[col].replace('nan', '')
+
+                # Clasificar área y contar cantidades
+                def clasificar_area(proc):
+                    proc = str(proc).upper()
+                    if 'ESTAMPADO' in proc: return 'Estampado'
+                    if 'SOLDADURA' in proc: return 'Soldadura'
+                    return 'Otro'
+                
+                col_proceso = next((c for c in df_opl.columns if 'proceso' in c.lower()), None)
+                if not col_proceso:
+                    raise Exception("No se encontró la columna 'nombre proceso'. Verifica los encabezados pegados.")
+
+                df_opl['Area_Fumi'] = df_opl[col_proceso].apply(clasificar_area)
+                c_est = len(df_opl[df_opl['Area_Fumi'] == 'Estampado'])
+                c_sol = len(df_opl[df_opl['Area_Fumi'] == 'Soldadura'])
+                total_reclamos = len(df_opl)
+                
+                # Fecha objetivo para resaltado en tabla (Ayer o Viernes si es Lunes)
+                hoy = pd.to_datetime("today").normalize()
+                if hoy.weekday() == 0: # Lunes
+                    f_obj = hoy - timedelta(days=3)
+                else:
+                    f_obj = hoy - timedelta(days=1)
+                f_obj_str = f_obj.strftime('%d/%m/%Y')
+
+                # 2. Construcción del Reporte Visual Unificado (Subplots con Plotly)
+                # Estructura: Fila 1 (KPIs invisibles para anotaciones), Fila 2 (Tendencia), Fila 3 (Tabla)
+                fig_reporte = make_subplots(
+                    rows=3, cols=1,
+                    row_heights=[0.1, 0.25, 0.65],
+                    vertical_spacing=0.04,
+                    specs=[[{"type": "domain"}], [{"type": "xy"}], [{"type": "table"}]]
+                )
+
+                # --- SECCIÓN 1: KPIs (Uso de anotaciones de Plotly para recuadros visuales) ---
+                # Usamos coordenadas relativas 'paper' para posicionar los recuadros en la parte superior
+                # KPI Estampado
+                fig_reporte.add_annotation(
+                    xref="paper", yref="paper", x=0.2, y=0.98,
+                    text=f"<b>ESTAMPADO</b><br><span style='font-size:32px;'>{c_est}</span>",
+                    showarrow=False, font=dict(size=16, color="#0F4C81"),
+                    bordercolor="#0F4C81", borderpad=10, bgcolor="#F0F8FF", opacity=0.9
+                )
+                # KPI Soldadura
+                fig_reporte.add_annotation(
+                    xref="paper", yref="paper", x=0.5, y=0.98,
+                    text=f"<b>SOLDADURA</b><br><span style='font-size:32px;'>{c_sol}</span>",
+                    showarrow=False, font=dict(size=16, color="#D35400"),
+                    bordercolor="#D35400", borderpad=10, bgcolor="#FFF5EE", opacity=0.9
+                )
+                # KPI Total
+                fig_reporte.add_annotation(
+                    xref="paper", yref="paper", x=0.8, y=0.98,
+                    text=f"<b>TOTAL RECLAMOS</b><br><span style='font-size:32px;'>{total_reclamos}</span>",
+                    showarrow=False, font=dict(size=16, color="#2C3E50"),
+                    bordercolor="#2C3E50", borderpad=10, bgcolor="#F8F9F9", opacity=0.9
+                )
+
+                # --- SECCIÓN 2: TENDENCIA (GENERAL, ESTAMPADO, SOLDADURA) ---
+                col_f = next((c for c in df_opl.columns if 'fecha' in c.lower()), None)
+                if col_f:
+                    df_opl['F_DT'] = pd.to_datetime(df_opl[col_f], dayfirst=True, errors='coerce')
+                    df_trend_data = df_opl[df_opl['F_DT'].notna()].copy()
+                    
+                    if not df_trend_data.empty:
+                        # Preparar datos agrupados por Área y Fecha
+                        df_area_t = df_trend_data.groupby(['F_DT', 'Area_Fumi']).size().reset_index(name='Cant').sort_values('F_DT')
+                        
+                        # Preparar datos agrupados solo por Fecha (GENERAL/Total)
+                        df_total_t = df_trend_data.groupby('F_DT').size().reset_index(name='Cant').sort_values('F_DT')
+                        
+                        # Graficar líneas en el Subplot fila 2
+                        # Línea GENERAL (Total planta)
+                        fig_reporte.add_trace(go.Scatter(
+                            x=df_total_t['F_DT'], 
+                            y=df_total_t['Cant'], 
+                            name='GENERAL (Total)', 
+                            line=dict(color='#7F8C8D', width=4, dash='dot'), # Gris, punteada gruesa
+                            mode='lines+markers'
+                        ), row=2, col=1)
+
+                        # Líneas específicas por área (Map colores definidos)
+                        colores_map = {'Estampado': '#0F4C81', 'Soldadura': '#D35400'}
+                        for area in ['Estampado', 'Soldadura']:
+                            subset = df_area_t[df_area_t['Area_Fumi'] == area]
+                            if not subset.empty:
+                                fig_reporte.add_trace(go.Scatter(
+                                    x=subset['F_DT'], 
+                                    y=subset['Cant'], 
+                                    name=f"Área {area}", 
+                                    line=dict(color=colores_map[area], width=3), 
+                                    mode='lines+markers'
+                                ), row=2, col=1)
+                        
+                        # Configuraciones de ejes del gráfico de tendencia
+                        fig_reporte.update_xaxes(title_text="Fecha de Alta", type='date', tickformat="%d/%m", row=2, col=1)
+                        fig_reporte.update_yaxes(title_text="Cantidad Reclamos", rangemode="tozero", gridcolor="#EAECEE", row=2, col=1)
+
+                # --- SECCIÓN 3: TABLA DETALLADA ---
+                # Definir colores de fila (rojo para novedades de la fecha objetivo)
+                colors_hoja = []
+                # Re-parsear fechas de la columna original para asegurar consistencia con el índice
+                fechas_tabla = pd.to_datetime(df_opl[col_f], dayfirst=True, errors='coerce') if col_f else [None]*len(df_opl)
+                
+                for f in fechas_tabla:
+                    if pd.notna(f) and f == f_obj:
+                        colors_hoja.append('#FFCDD2') # Rojo claro para novedad
+                    else:
+                        colors_hoja.append('#F8F9F9') # Gris muy claro/blanco normal
+
+                # Seleccionar columnas a mostrar (primeras 8 para no saturar imagen horizontal)
+                cols_viz = list(df_opl.columns[:8])
+                
+                # Reemplazar nombres de columnas largos o con espacios para el encabezado visual
+                headers_viz = [c.replace('nombre', '').replace('descripción', 'desc.').title() for c in cols_viz]
+
+                # Agregar traza de tabla en el Subplot fila 3
+                fig_reporte.add_trace(go.Table(
+                    header=dict(
+                        values=headers_viz,
+                        fill_color='#2C3E50',
+                        font=dict(color='white', size=13, family="Arial Black"),
+                        align='center', height=35
+                    ),
+                    cells=dict(
+                        values=[df_opl[c] for c in cols_viz],
+                        fill_color=[colors_hoja] * len(cols_viz), # Aplicar array de colores a cada columna
+                        font=dict(color='black', size=11, family="Arial"),
+                        align='left', height=28
+                    )
+                ), row=3, col=1)
+
+                # 3. Ajustes finales de layout de la imagen unificada
+                n_filas = len(df_opl)
+                # Altura dinámica corregida: Base fija + proporcional a cantidad de filas de la tabla
+                dynamic_height = 800 + (n_filas * 35)
+                
+                fig_reporte.update_layout(
+                    title=dict(
+                        text=f"<b>REPORTE INTEGRAL DE ALERTAS OPL - FUMISCOR</b><br><sup>Total registros: {total_reclamos} | Novedades en rojo correspondientes al {f_obj_str}</sup>", 
+                        font=dict(size=24, color="#1F2937")
+                    ),
+                    width=1400, # Ancho fijo horizontal ancho
+                    height=dynamic_height, 
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
+                    margin=dict(t=140, b=20, l=20, r=20),
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=0.62, xanchor="center", x=0.5, bgcolor="rgba(255,255,255,0.8)")
+                )
+
+                # 4. Renderizado de la imagen final a bytes (PNG de alta resolución con scale=2)
+                img_bytes = fig_reporte.to_image(format="png", engine="kaleido", scale=2)
+                
+                st.success(f"✅ Dashboard visual generado exitosamente (detectadas {total_reclamos} OPLs). Previsualización a continuación:")
+                
+                # Mostrar previsualización en pantalla
+                st.image(img_bytes, use_container_width=True)
+                
+                # Botón de descarga de la imagen generada
+                st.download_button(
+                    label="📥 Descargar Reporte OPL Unificado (PNG)",
+                    data=img_bytes,
+                    file_name=f"Reporte_Integral_OPL_{hoy.strftime('%Y%m%d')}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+
+        except Exception as e:
+            st.error(f"Error crítico al procesar la imagen/dashboard: {e}")
+            st.info("Asegúrate de copiar la tabla completa desde el Excel, incluyendo la fila de encabezados.")
 
 # ==========================================
 # 6. INTERFAZ STREAMLIT FINAL (BOTONES)
