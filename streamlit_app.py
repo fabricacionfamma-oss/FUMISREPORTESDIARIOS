@@ -369,7 +369,6 @@ def setup_table_row(pdf):
     pdf.set_fill_color(255, 255, 255); pdf.set_text_color(50, 50, 50); pdf.set_draw_color(200, 200, 200)
 
 def set_pdf_color_metric(pdf, val, metric_name):
-    # Ya que los datos entran en escala 0-100+, los targets también deben estar en escala 0-100+
     targets = {
         'OEE': 75.0,
         'DISPONIBILIDAD': 88.0,
@@ -638,7 +637,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
     pdf.ln(10); pdf.set_font("Arial", 'U', 11); pdf.set_text_color(*comp_color)
         
     for g in grupos_area:
-        # Reemplazo los símbolos por >> y -> que son compatibles con FPDF sin problemas de encoding
         pdf.cell(0, 7, clean_text(f">> Grupo {g} - Resumen General del Área"), ln=True, link=links_resumen_grupo[g])
         pdf.cell(0, 7, clean_text(f"      -> Ir al Detalle Individual Máquina a Máquina"), ln=True, link=links_detalle_grupo[g])
         pdf.ln(1)
@@ -726,12 +724,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 g_perf_w += metrics['PERFORMANCE'] * t_o
                 g_oee_w += metrics['OEE'] * t_p
                 
-        # ==== CORRECCIÓN APLICADA AQUÍ ====
         g_disp = g_disp_w / g_plan if g_plan > 0 else 0
         g_perf = g_perf_w / g_op if g_op > 0 else 0
         g_cal = (g_buenas / g_totales) * 100 if g_totales > 0 else 0 
         g_oee = g_oee_w / g_plan if g_plan > 0 else 0 
-        # ==================================
         
         m_g = {'OEE': g_oee, 'DISPONIBILIDAD': g_disp, 'PERFORMANCE': g_perf, 'CALIDAD': g_cal}
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
@@ -783,7 +779,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             if not df_m_g.empty:
                 df_m_g_melt = df_m_g.melt(id_vars=['Máquina'], value_vars=['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD'], var_name='Indicador', value_name='Valor')
                 
-                # --- CAMBIO APLICADO: Eje X = Indicador, Color = Máquina ---
                 fig_kpis = px.bar(
                     df_m_g_melt, x='Indicador', y='Valor', color='Máquina', 
                     barmode='group', text_auto='.1f',
@@ -1021,11 +1016,12 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             pdf.set_y(max(max_y_tab, y_base_p + 75) + 5)
 
 
-        # 5. RESUMEN VISUAL DE TIEMPOS DEL GRUPO (FORZA SALTO DE PAGINA)
+        # 5. RESUMEN VISUAL DE TIEMPOS DEL GRUPO (AHORA SIN FORZAR SALTO DE PÁGINA)
         resumen_global = df_pdf_g.groupby('Estado_Global')['Tiempo (Min)'].sum().reset_index() if not df_pdf_g.empty else pd.DataFrame()
         total_global = resumen_global['Tiempo (Min)'].sum() if not resumen_global.empty else 0
 
-        pdf.add_page() # Fuerza página limpia única garantizando que no se encime
+        # Cambiamos add_page() por check_space() para que fluya
+        check_space(pdf, 110)
         num_section_visual = "4." if p_tipo == "Mensual" else "5."
         
         if total_global > 0:
@@ -1067,18 +1063,24 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if t_total > 0: maquinas_con_tiempo.append(maq)
 
         if maquinas_con_tiempo:
-            pdf.add_page()
+            # En lugar de pdf.add_page(), solo saltamos si no entra el título principal
+            check_space(pdf, 40)
             pdf.set_link(links_detalle_grupo[g]) # Destino del segundo hipervínculo del índice
             pdf.set_font("Times", 'B', 16)
             pdf.set_text_color(*theme_color)
             pdf.cell(0, 10, clean_text(f"DESGLOSE DETALLADO POR MÁQUINA - GRUPO {g}"), ln=True, border='B')
             pdf.ln(5)
             
-            for maq in maquinas_con_tiempo:
-                if p_tipo in ["Mensual", "Semanal"]:
-                    pdf.add_page()
-                else:
-                    check_space(pdf, 50)
+            for idx, maq in enumerate(maquinas_con_tiempo):
+                # Separador visual entre máquinas si no es la primera, en vez de salto de página
+                if idx > 0 and pdf.get_y() > 30:
+                    pdf.ln(5)
+                    pdf.set_draw_color(200, 200, 200)
+                    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+                    pdf.ln(5)
+                
+                # Nos aseguramos de que haya espacio para el título y la tabla principal de esta máquina
+                check_space(pdf, 70) 
                 
                 df_maq = df_pdf_g[df_pdf_g['Máquina'] == maq]
                 t_prod = df_maq[df_maq['Estado_Global'] == 'Producción']['Tiempo (Min)'].sum()
@@ -1211,10 +1213,10 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                         dibujar_tabla_eventos_detallada(df_maq_paradas, 'Detalle_Final', "Paradas Programadas", theme_color)
 
 
-        # 6. PRODUCCIÓN POR GRUPO (MOVIDO AL FINAL DEL GRUPO EN SU PROPIA PAGINA)
+        # 6. PRODUCCIÓN POR GRUPO (AHORA SIN FORZAR SALTO DE PÁGINA)
         df_prod_pdf_g = df_prod_pdf[df_prod_pdf['Grupo_Máquina'] == g] if not df_prod_pdf.empty else pd.DataFrame()
         if not df_prod_pdf_g.empty:
-            pdf.add_page()
+            check_space(pdf, 100)
             print_section_title(pdf, "Desglose de Producción del Grupo", theme_color)
             
             prod_maq = df_prod_pdf_g.groupby('Máquina')[['Buenas', 'Retrabajo', 'Observadas']].sum().reset_index()
@@ -1590,11 +1592,12 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
             st.info("Asegúrate de copiar la tabla completa desde el Excel, incluyendo la fila de encabezados.")
 
 # ==========================================
-# 6. BOTONES DE EXPORTACIÓN PDF (Al final)
+# 6. BOTONES DE EXPORTACIÓN EN PANTALLA
 # ==========================================
 st.divider()
+
 with col_p3:
-    st.write("**3. Generar y Descargar Reportes PDF:**")
+    st.write("**3. Generar y Descargar PDF:**")
     
     if pdf_tipo == "Mensual":
         col_btn1, col_btn2, col_btn3 = st.columns(3)
