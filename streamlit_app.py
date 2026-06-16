@@ -1512,61 +1512,73 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
 # 5.5. EDITOR MANUAL DEL REPORTE (NUEVO)
 # ==========================================
 st.divider()
-with st.expander("🛠️ Editor Manual de Datos (Opcional antes de generar el PDF)", expanded=False):
-    st.markdown("Usa estas opciones para alterar los datos del reporte. Puedes ocultar máquinas, sobreescribir KPIs, ajustar los horarios de inicio/fin o eliminar eventos basura.")
+with st.expander("🛠️ Editor Manual de Datos (Ajustes antes de exportar el PDF)", expanded=False):
+    st.markdown("Utiliza estas tablas para alterar los datos. **Los cambios que realices aquí se reflejarán directamente en los totales, gráficos e indicadores del PDF (tanto Diario como Semanal o Mensual).**")
 
     # --- 1. OCULTAR MÁQUINAS ---
-    st.markdown("**1. Ocultar Máquinas**")
+    st.markdown("#### 1. Ocultar Máquinas")
     maquinas_lista = sorted(df_metrics['Máquina'].unique().tolist()) if not df_metrics.empty else []
     maq_ocultas = st.multiselect("Selecciona las máquinas que NO quieres que aparezcan en este reporte:", maquinas_lista)
 
-    # --- 2. EDITAR PERFORMANCE Y DISPONIBILIDAD ---
-    st.markdown("**2. Modificar KPIs (Performance / Disponibilidad)**")
-    st.caption("Haz doble clic en la celda de Performance o Disponibilidad para sobreescribir su valor.")
+    # --- 2. EDITAR KPIs Y HORAS TOTALES ---
+    st.markdown("#### 2. Modificar KPIs y Horas Totales por Máquina")
+    st.info("💡 **Tip:** Si eliminas una falla en el paso 4, recuerda ajustar aquí el **T_Parada** (restando esos minutos) y el **T_Operativo** (sumándolos) para que los cuadros resumen de arriba coincidan. También puedes sobreescribir el % de OEE y demás indicadores.")
     if not df_metrics.empty:
-        df_kpi_edit = df_metrics.copy()
-        df_kpi_edit = st.data_editor(
-            df_kpi_edit,
-            disabled=["Máquina", "OEE", "CALIDAD", "T_Operativo", "T_Parada", "Buenas", "Retrabajo", "Observadas"],
+        df_metrics = st.data_editor(
+            df_metrics,
+            disabled=["Máquina"], # Desbloqueamos TODAS las columnas numéricas
             hide_index=True,
             key="editor_kpi",
             use_container_width=True
         )
-        df_metrics = df_kpi_edit # Guardamos los cambios hechos por el usuario
     else:
-        st.info("No hay métricas cargadas para editar.")
+        st.caption("No hay métricas cargadas.")
 
-    # --- 3. EDITAR / ELIMINAR EVENTOS Y HORARIOS ---
-    st.markdown("**3. Modificar Horarios o Eliminar Eventos**")
-    st.caption("Para **eliminar un evento**, selecciona la casilla a la izquierda de la fila y presiona `Supr` (o el ícono de la papelera). Para **modificar horarios**, edita `Inicio_Str` o `Fin_Str`.")
+    # --- 3. EDITAR PRODUCCIÓN ---
+    st.markdown("#### 3. Modificar Desglose de Producción")
+    st.caption("Ajusta manualmente la cantidad de piezas Buenas, Retrabajo u Observadas por código de producto.")
+    if not pdf_df_prod_target.empty:
+        pdf_df_prod_target = st.data_editor(
+            pdf_df_prod_target,
+            disabled=["Máquina", "Código"],
+            hide_index=True,
+            key="editor_prod",
+            use_container_width=True
+        )
+    else:
+        st.caption("No hay datos de producción.")
+
+    # --- 4. EDITAR EVENTOS, HORARIOS Y FALLAS ---
+    st.markdown("#### 4. Modificar Horarios o Eliminar Eventos (Fallas/Paradas)")
+    st.caption("Para **eliminar un evento**, selecciona la casilla izquierda de la fila y presiona la tecla `Suprimir` (o el ícono de la papelera). Puedes modificar `Inicio_Str`, `Fin_Str` y `Tiempo (Min)` directamente en las celdas.")
     if not df_raw.empty:
-        # Configuramos el editor para que puedan borrar filas y mostramos solo lo útil
-        df_raw_edit = st.data_editor(
+        df_raw = st.data_editor(
             df_raw,
-            num_rows="dynamic", # ¡Esto permite eliminar filas!
+            num_rows="dynamic", # Permite agregar o eliminar filas enteras
             column_config={
-                "Evento_Id": None, # Ocultamos IDs internos
+                "Evento_Id": None,
                 "Categoria_Macro": None,
                 "Estado_Global": st.column_config.TextColumn(disabled=True),
             },
             key="editor_eventos",
             use_container_width=True
         )
-        df_raw = df_raw_edit
-
-        # Recalcular "Tiempo (Min)" dinámicamente por si el usuario modificó las horas
-        def recalcular_tiempo_editado(row):
-            try:
-                ini = int(str(row['Inicio_Str']).split(':')[0])*60 + int(str(row['Inicio_Str']).split(':')[1])
-                fin = int(str(row['Fin_Str']).split(':')[0])*60 + int(str(row['Fin_Str']).split(':')[1])
-                diff = fin - ini
-                return diff if diff >= 0 else diff + 1440
-            except:
-                return row['Tiempo (Min)']
-
-        df_raw['Tiempo (Min)'] = df_raw.apply(recalcular_tiempo_editado, axis=1)
     else:
-        st.info("No hay eventos en este período para editar.")
+        st.caption("No hay eventos en este período para editar.")
+
+    # --- 5. EDITAR PERFORMANCE OPERARIOS ---
+    st.markdown("#### 5. Modificar Performance de Operarios")
+    st.caption("Si necesitas corregir el porcentaje de rendimiento de algún operador, hazlo aquí.")
+    if not pdf_df_op_target.empty:
+        pdf_df_op_target = st.data_editor(
+            pdf_df_op_target,
+            disabled=["Operador", "Fábrica"],
+            hide_index=True,
+            key="editor_op",
+            use_container_width=True
+        )
+    else:
+        st.caption("No hay datos de operarios.")
 
 # --- APLICAR FILTRO DE MÁQUINAS OCULTAS AL RESTO DEL CÓDIGO ---
 if maq_ocultas:
@@ -1574,6 +1586,7 @@ if maq_ocultas:
     df_raw = df_raw[~df_raw['Máquina'].isin(maq_ocultas)]
     pdf_df_prod_target = pdf_df_prod_target[~pdf_df_prod_target['Máquina'].isin(maq_ocultas)]
     df_trend = df_trend[~df_trend['Máquina'].isin(maq_ocultas)]
+
 
 # ==========================================
 # 6. INTERFAZ STREAMLIT FINAL (BOTONES)
