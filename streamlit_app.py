@@ -449,10 +449,14 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
     def calc_metrics(df_grp, idx_name):
         if idx_name in df_grp.index:
             row = df_grp.loc[idx_name]
-            oee = row['OEE_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
             disp = row['Disp_Num'] / row['T_Planificado'] if row['T_Planificado'] > 0 else 0
             perf = row['Perf_Num'] / row['T_Operativo'] if row['T_Operativo'] > 0 else 0
             cal = row['Cal_Num'] / row['Piezas_Totales'] if row['Piezas_Totales'] > 0 else 0
+            
+            # --- CORRECCIÓN OEE ---
+            # El OEE ahora se calcula como el producto de los otros 3 indicadores
+            oee = (disp * perf * cal) / 10000 
+            
             return oee, disp, perf, cal
         return 0, 0, 0, 0
 
@@ -504,10 +508,11 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
 
         trend_planta = df_trend_all[df_trend_all['Planta'] != 'OTRO'].groupby(['Month', 'Planta'])[['OEE_Num', 'OEE_Den', 'Disp_Num', 'Perf_Num', 'Cal_Num', 'T_Operativo', 'Piezas_Totales']].sum().reset_index()
         
-        trend_planta['OEE'] = (trend_planta['OEE_Num'] / trend_planta['OEE_Den']).fillna(0)
         trend_planta['DISP'] = (trend_planta['Disp_Num'] / trend_planta['OEE_Den']).fillna(0)
         trend_planta['PERF'] = (trend_planta['Perf_Num'] / trend_planta['T_Operativo']).fillna(0)
         trend_planta['CAL'] = (trend_planta['Cal_Num'] / trend_planta['Piezas_Totales']).fillna(0)
+        # --- CORRECCIÓN OEE HISTÓRICO ---
+        trend_planta['OEE'] = (trend_planta['DISP'] * trend_planta['PERF'] * trend_planta['CAL']) / 10000
 
         trend_melt = trend_planta.melt(id_vars=['Month', 'Planta'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
         trend_melt['Mes_Nombre'] = trend_melt['Month'].map(meses_map)
@@ -565,15 +570,19 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
             pdf.ln(5)
             
             row_maq = df_met_all[df_met_all['Máquina'] == maq].iloc[0]
-            y_curr = draw_kpi_row(pdf, pdf.get_y(), "INDICADORES DEL MES", row_maq['OEE'], row_maq['DISPONIBILIDAD'], row_maq['PERFORMANCE'], row_maq['CALIDAD'], theme_color)
+            # --- CORRECCIÓN OEE A NIVEL MÁQUINA INDIVIDUAL ---
+            oee_maq_individual = (row_maq['DISPONIBILIDAD'] * row_maq['PERFORMANCE'] * row_maq['CALIDAD']) / 10000
+
+            y_curr = draw_kpi_row(pdf, pdf.get_y(), "INDICADORES DEL MES", oee_maq_individual, row_maq['DISPONIBILIDAD'], row_maq['PERFORMANCE'], row_maq['CALIDAD'], theme_color)
             
             if not df_trend.empty:
                 df_t_maq = df_trend[df_trend['Máquina'] == maq].copy()
                 if not df_t_maq.empty:
-                    df_t_maq['OEE'] = (df_t_maq['OEE_Num'] / df_t_maq['OEE_Den']).fillna(0)
                     df_t_maq['DISP'] = (df_t_maq['Disp_Num'] / df_t_maq['OEE_Den']).fillna(0)
                     df_t_maq['PERF'] = (df_t_maq['Perf_Num'] / df_t_maq['T_Operativo']).fillna(0)
                     df_t_maq['CAL'] = (df_t_maq['Cal_Num'] / df_t_maq['Piezas_Totales']).fillna(0)
+                    # --- CORRECCIÓN OEE HISTÓRICO MÁQUINA ---
+                    df_t_maq['OEE'] = (df_t_maq['DISP'] * df_t_maq['PERF'] * df_t_maq['CAL']) / 10000
                     
                     df_t_maq_melt = df_t_maq.melt(id_vars=['Month'], value_vars=['OEE', 'DISP', 'PERF', 'CAL'], var_name='Indicador', value_name='Valor')
                     df_t_maq_melt['Mes_Nombre'] = df_t_maq_melt['Month'].map(meses_map)
@@ -689,8 +698,11 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         maq_row = df_metrics_pdf[df_metrics_pdf['Máquina'] == maq_name]
         if maq_row.empty: return None
         r = maq_row.iloc[0]
+        # --- CORRECCIÓN OEE EN MÁQUINAS INDIVIDUALES (EN ESTA VISTA DETALLADA) ---
+        calc_oee_indiv = (r['DISPONIBILIDAD'] * r['PERFORMANCE'] * r['CALIDAD']) / 10000
+
         return {
-            'OEE': r['OEE'], 'DISPONIBILIDAD': r['DISPONIBILIDAD'], 
+            'OEE': calc_oee_indiv, 'DISPONIBILIDAD': r['DISPONIBILIDAD'], 
             'PERFORMANCE': r['PERFORMANCE'], 'CALIDAD': r['CALIDAD'], 
             'T_Planificado': (r['T_Operativo'] + r['T_Parada']) if pd.notna(r['T_Operativo']) else 0,
             'T_Operativo': r['T_Operativo'] if pd.notna(r['T_Operativo']) else 0, 
@@ -711,7 +723,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         # 1. RESUMEN OEE DEL GRUPO
         check_space(pdf, 30); print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         g_plan = 0; g_op = 0; g_buenas = 0; g_totales = 0
-        g_disp_w = 0; g_perf_w = 0; g_oee_w = 0
+        g_disp_w = 0; g_perf_w = 0
         maquinas_metricas = {}
         
         for maq in maq_del_grupo:
@@ -724,12 +736,13 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 
                 g_disp_w += metrics['DISPONIBILIDAD'] * t_p
                 g_perf_w += metrics['PERFORMANCE'] * t_o
-                g_oee_w += metrics['OEE'] * t_p
                 
         g_disp = g_disp_w / g_plan if g_plan > 0 else 0
         g_perf = g_perf_w / g_op if g_op > 0 else 0
         g_cal = (g_buenas / g_totales) * 100 if g_totales > 0 else 0 
-        g_oee = g_oee_w / g_plan if g_plan > 0 else 0 
+        
+        # --- CORRECCIÓN OEE DEL GRUPO ---
+        g_oee = (g_disp * g_perf * g_cal) / 10000 
         
         m_g = {'OEE': g_oee, 'DISPONIBILIDAD': g_disp, 'PERFORMANCE': g_perf, 'CALIDAD': g_cal}
         print_pdf_metric_row(pdf, f"Total {g}", m_g)
@@ -746,6 +759,12 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 if not df_trend_g.empty:
                     meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
                     df_trend_g['Mes_Nombre'] = df_trend_g['Month'].map(meses_map)
+                    
+                    # --- CORRECCIÓN OEE HISTÓRICO ---
+                    df_trend_g['DISP'] = (df_trend_g['Disp_Num'] / df_trend_g['OEE_Den']).fillna(0)
+                    df_trend_g['PERF'] = (df_trend_g['Perf_Num'] / df_trend_g['T_Operativo']).fillna(0)
+                    df_trend_g['CAL'] = (df_trend_g['Cal_Num'] / df_trend_g['Piezas_Totales']).fillna(0)
+                    df_trend_g['OEE'] = (df_trend_g['DISP'] * df_trend_g['PERF'] * df_trend_g['CAL']) / 10000
                     
                     fig_trend_oee = px.bar(
                         df_trend_g, x='Mes_Nombre', y='OEE', color='Máquina', 
@@ -775,6 +794,9 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             print_section_title(pdf, f"2. Comparativa de KPIs entre Máquinas ({p_tipo})", theme_color)
             df_m_g = df_metrics_pdf[df_metrics_pdf['Máquina'].isin(maq_del_grupo)].copy()
             if not df_m_g.empty:
+                # --- CORRECCIÓN OEE EN GRÁFICO DIARIO/SEMANAL ---
+                df_m_g['OEE'] = (df_m_g['DISPONIBILIDAD'] * df_m_g['PERFORMANCE'] * df_m_g['CALIDAD']) / 10000
+
                 df_m_g_melt = df_m_g.melt(id_vars=['Máquina'], value_vars=['OEE', 'DISPONIBILIDAD', 'PERFORMANCE', 'CALIDAD'], var_name='Indicador', value_name='Valor')
                 
                 if df_m_g_melt['Valor'].max() <= 10.0:
