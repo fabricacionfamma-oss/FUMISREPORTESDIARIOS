@@ -188,7 +188,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             else:
                 df_op_target = pd.DataFrame()
 
-            # --- NUEVA CONSULTA DE HORARIOS DE TURNOS ---
+            # --- CONSULTA DE HORARIOS DE TURNOS ---
             q_horarios = f"""
                 WITH Tiempos_Turno AS (
                     SELECT CellId, TurnId, Date as Dia,
@@ -687,40 +687,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.cell(0, 10, f"No hay datos registrados para la fabrica {area} en este periodo.", ln=True)
         return pdf.output(dest='S').encode('latin-1')
 
-    def dibujar_tabla_eventos_detallada(df_subset, col_detalle, titulo, color_t):
-        if not df_subset.empty:
-            check_space(pdf, 25); pdf.set_font("Arial", 'B', 9); pdf.set_text_color(*color_t)
-            pdf.cell(0, 6, clean_text(f">> {titulo}:"), ln=True); pdf.ln(1)
-            def dibujar_cabeceras():
-                setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
-                pdf.cell(15, 6, "Fecha", 1, 0, 'C', True)
-                pdf.cell(12, 6, "Ini.", 1, 0, 'C', True)
-                pdf.cell(12, 6, "Fin", 1, 0, 'C', True)
-                pdf.cell(106, 6, "Detalle Registrado en Sistema", 1, 0, 'L', True)
-                pdf.cell(12, 6, "Min", 1, 0, 'C', True)
-                pdf.cell(33, 6, "Operador", 1, 1, 'L', True)
-            
-            dibujar_cabeceras(); setup_table_row(pdf); pdf.set_font("Arial", '', 8)
-            df_subset['_sort_time'] = df_subset['Inicio_Str'].apply(lambda x: parse_time_to_mins(x) if pd.notna(x) else 9999)
-            df_subset = df_subset.sort_values(['Fecha_Filtro', '_sort_time'], ascending=[True, True])
-            for _, row in df_subset.iterrows():
-                if pdf.get_y() > 265:
-                    pdf.add_page(); dibujar_cabeceras(); setup_table_row(pdf); pdf.set_font("Arial", '', 8)
-                val_fecha = pd.to_datetime(row['Fecha_Filtro']).strftime('%d/%m') if pd.notna(row['Fecha_Filtro']) else "-"
-                val_inicio = str(row['Inicio_Str'])[:5] if pd.notna(row['Inicio_Str']) else "-"
-                val_fin = str(row['Fin_Str'])[:5] if pd.notna(row['Fin_Str']) else "-"
-                minutos = f"{row['Tiempo (Min)']:.0f}"
-                operador = " " + str(row['Operador'])[:15]
-                detalle_str = " " + str(row[col_detalle]) if col_detalle in row and pd.notna(row[col_detalle]) else " Sin detalle"
-                
-                pdf.cell(15, 5, val_fecha, 'B', 0, 'C')
-                pdf.cell(12, 5, val_inicio, 'B', 0, 'C')
-                pdf.cell(12, 5, val_fin, 'B', 0, 'C')
-                pdf.cell(106, 5, clean_text(detalle_str[:70]), 'B', 0, 'L')
-                pdf.cell(12, 5, minutos, 'B', 0, 'C')
-                pdf.cell(33, 5, clean_text(operador), 'B', 1, 'L')
-            pdf.ln(4)
-
     def obtener_metricas_maquina(maq_name):
         maq_row = df_metrics_pdf[df_metrics_pdf['Máquina'] == maq_name]
         if maq_row.empty: return None
@@ -849,7 +815,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 pdf.set_font("Arial", 'I', 9); pdf.cell(0, 6, clean_text("No hay datos de KPIs para graficar en este periodo."), ln=True)
 
         # =========================================================================
-        # 3. HORARIOS Y TIEMPO DE APERTURA CON CODIFICACIÓN DE COLORES
+        # 3. HORARIOS Y TIEMPO DE APERTURA (CON COLORES SOLO EN DIARIO)
         # =========================================================================
         if p_tipo in ["Diario", "Semanal"]:
             print_section_title(pdf, "3. Horarios y Tiempo de Apertura", theme_color)
@@ -883,6 +849,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                                 for d in dias: pdf.cell(w_day, 6, d, 1, 0 if d != "Viernes" else 1, 'C', True)
                                 setup_table_row(pdf); pdf.set_font("Arial", '', 8)
 
+                            pdf.set_text_color(50, 50, 50)
                             pdf.cell(w_maq, 5, " " + clean_text(maq_name), 1, 0, 'L')
                             pdf.cell(w_tur, 5, clean_text(turno), 1, 0, 'C')
 
@@ -890,6 +857,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                                 day_data = group[group['Weekday'] == day_idx]
                                 if not day_data.empty:
                                     rango = day_data.iloc[0]['Rango']
+                                    # Formato simple de texto para semanal sin colores extraños
                                     pdf.cell(w_day, 5, rango, 1, 0 if day_idx < 4 else 1, 'C')
                                 else:
                                     pdf.cell(w_day, 5, "", 1, 0 if day_idx < 4 else 1, 'C')
@@ -916,14 +884,14 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             pdf.cell(w_maq, 5, " " + clean_text(r_hor['Máquina']), 1, 0, 'L')
                             pdf.cell(w_tur, 5, clean_text(r_hor['Turno']), 1, 0, 'C')
                             
-                            # --- COLOR PARA HORA INICIO ---
+                            # --- COLOR PARA HORA INICIO SOLO EN DIARIO ---
                             hora_ini = str(r_hor['Hora_Inicio'])
                             try:
                                 h, m = map(int, hora_ini.split(':'))
                                 total_min = h * 60 + m
                                 if 360 <= total_min <= 370: # 06:00 - 06:10 -> Verde
                                     pdf.set_text_color(33, 195, 84)
-                                elif 370 < total_min <= 420: # 06:10 - 07:00 -> Rojo
+                                elif 370 < total_min <= 420: # 06:11 - 07:00 -> Rojo
                                     pdf.set_text_color(220, 20, 20)
                                 else: # Horarios del medio u otros turnos -> Violeta
                                     pdf.set_text_color(128, 0, 128)
@@ -932,14 +900,14 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             
                             pdf.cell(w_hor, 5, hora_ini, 1, 0, 'C')
                             
-                            # --- COLOR PARA HORA CIERRE ---
+                            # --- COLOR PARA HORA CIERRE SOLO EN DIARIO ---
                             hora_fin = str(r_hor['Hora_Cierre'])
                             try:
                                 h_f, m_f = map(int, hora_fin.split(':'))
                                 total_min_fin = h_f * 60 + m_f
                                 if 845 <= total_min_fin <= 858: # 14:05 - 14:18 -> Verde (Ideal)
                                     pdf.set_text_color(33, 195, 84)
-                                elif 810 <= total_min_fin < 845: # 13:30 - 14:05 -> Rojo (Prematuro)
+                                elif 810 <= total_min_fin < 845: # 13:30 - 14:04 -> Rojo (Prematuro)
                                     pdf.set_text_color(220, 20, 20)
                                 else: # Horarios del medio u otros turnos -> Violeta
                                     pdf.set_text_color(128, 0, 128)
@@ -1215,7 +1183,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.set_text_color(0, 0, 0)
         
         # -----------------------------------------------------------------
-        # CUADRO RESUMEN POR MÁQUINAS
+        # CUADRO RESUMEN POR MÁQUINAS (Fluye naturalmente)
         # -----------------------------------------------------------------
         maquinas_con_tiempo = []
         if not df_pdf_g.empty:
@@ -1253,6 +1221,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 t_parada = df_maq[df_maq['Estado_Global'] == 'Parada Programada']['Tiempo (Min)'].sum()
                 t_desc = df_maq[df_maq['Estado_Global'] == 'Descanso']['Tiempo (Min)'].sum()
 
+                # Cálculo de tiempo no registrado por turno
                 total_noreg = 0
                 for (fecha, turno), grp_t in df_maq.groupby(['Fecha_Filtro', 'Turno']):
                     intervals = []
@@ -1515,13 +1484,15 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
     
     if datos_pegados:
         try:
-            with st.spinner("Procesando datos y generating dashboard visual..."):
+            with st.spinner("Procesando datos y generando dashboard visual..."):
+                # 1. Procesamiento de datos
                 df_opl = pd.read_csv(io.StringIO(datos_pegados), sep='\t', dtype=str)
                 df_opl.columns = df_opl.columns.str.strip()
                 for col in df_opl.columns:
                     df_opl[col] = df_opl[col].astype(str).str.replace('⊟', '', regex=False).str.strip()
                     df_opl[col] = df_opl[col].replace('nan', '')
 
+                # Clasificar área y contar cantidades
                 def clasificar_area(proc):
                     proc = str(proc).upper()
                     if 'ESTAMPADO' in proc: return 'Estampado'
@@ -1537,13 +1508,16 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                 c_sol = len(df_opl[df_opl['Area_Fumi'] == 'Soldadura'])
                 total_reclamos = len(df_opl)
                 
+                # Fecha objetivo para resaltado en tabla (Ayer o Viernes si es Lunes)
                 hoy = pd.to_datetime("today").normalize()
-                if hoy.weekday() == 0: 
+                if hoy.weekday() == 0: # Lunes
                     f_obj = hoy - timedelta(days=3)
                 else:
                     f_obj = hoy - timedelta(days=1)
                 f_obj_str = f_obj.strftime('%d/%m/%Y')
 
+                # 2. Construcción del Reporte Visual Unificado (Subplots con Plotly)
+                # Estructura: Fila 1 (KPIs invisibles para anotaciones), Fila 2 (Tendencia), Fila 3 (Tabla)
                 fig_reporte = make_subplots(
                     rows=3, cols=1,
                     row_heights=[0.1, 0.25, 0.65],
@@ -1551,18 +1525,23 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                     specs=[[{"type": "domain"}], [{"type": "xy"}], [{"type": "table"}]]
                 )
 
+                # --- SECCIÓN 1: KPIs (Uso de anotaciones de Plotly para recuadros visuales) ---
+                # Usamos coordenadas relativas 'paper' para posicionar los recuadros en la parte superior
+                # KPI Estampado
                 fig_reporte.add_annotation(
                     xref="paper", yref="paper", x=0.2, y=0.98,
                     text=f"<b>ESTAMPADO</b><br><span style='font-size:32px;'>{c_est}</span>",
                     showarrow=False, font=dict(size=16, color="#0F4C81"),
                     bordercolor="#0F4C81", borderpad=10, bgcolor="#F0F8FF", opacity=0.9
                 )
+                # KPI Soldadura
                 fig_reporte.add_annotation(
                     xref="paper", yref="paper", x=0.5, y=0.98,
                     text=f"<b>SOLDADURA</b><br><span style='font-size:32px;'>{c_sol}</span>",
                     showarrow=False, font=dict(size=16, color="#D35400"),
                     bordercolor="#D35400", borderpad=10, bgcolor="#FFF5EE", opacity=0.9
                 )
+                # KPI Total
                 fig_reporte.add_annotation(
                     xref="paper", yref="paper", x=0.8, y=0.98,
                     text=f"<b>TOTAL RECLAMOS</b><br><span style='font-size:32px;'>{total_reclamos}</span>",
@@ -1570,25 +1549,38 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                     bordercolor="#2C3E50", borderpad=10, bgcolor="#F8F9F9", opacity=0.9
                 )
 
+                # --- SECCIÓN 2: TENDENCIA (GENERAL, ESTAMPADO, SOLDADURA) ---
                 col_f = next((c for c in df_opl.columns if 'fecha' in c.lower()), None)
                 if col_f:
+                    # Convertir a datetime de forma segura
                     df_opl['F_DT'] = pd.to_datetime(df_opl[col_f], dayfirst=True, errors='coerce')
+                    
+                    # Filtrar filas donde la fecha sea válida para no arrastrar celdas vacías
                     df_trend_data = df_opl[df_opl['F_DT'].notna()].copy()
                     
                     if not df_trend_data.empty:
+                        # Ordenar cronológicamente para asegurar que el min y max sean los correctos
                         df_trend_data = df_trend_data.sort_values('F_DT')
+                        
+                        # Tomar estrictamente el primer día registrado y el último
                         min_date = df_trend_data['F_DT'].min()
                         max_date = df_trend_data['F_DT'].max()
+                        
+                        # Generar el vector con todos los días intermedios de forma consecutiva
                         fechas_completas = pd.date_range(start=min_date, end=max_date)
 
+                        # 1. Total General rellenando los días vacíos con 0
                         df_total_t = df_trend_data.groupby('F_DT').size().reindex(fechas_completas, fill_value=0).reset_index()
                         df_total_t.columns = ['F_DT', 'Cant']
 
+                        # 2. Desglose por Área rellenando los días vacíos con 0
                         df_area_t = df_trend_data.groupby(['F_DT', 'Area_Fumi']).size().unstack(fill_value=0)
                         df_area_t = df_area_t.reindex(fechas_completas, fill_value=0).reset_index()
                         df_area_t.rename(columns={'index': 'F_DT'}, inplace=True)
                         df_area_t = df_area_t.melt(id_vars='F_DT', var_name='Area_Fumi', value_name='Cant')
                         
+                        # Graficar líneas en el Subplot fila 2
+                        # Línea GENERAL (Total planta)
                         fig_reporte.add_trace(go.Scatter(
                             x=df_total_t['F_DT'], 
                             y=df_total_t['Cant'], 
@@ -1597,6 +1589,7 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                             mode='lines+markers'
                         ), row=2, col=1)
 
+                        # Líneas específicas por área
                         colores_map = {'Estampado': '#0F4C81', 'Soldadura': '#D35400'}
                         for area in ['Estampado', 'Soldadura']:
                             subset = df_area_t[df_area_t['Area_Fumi'] == area]
@@ -1609,6 +1602,8 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                                     mode='lines+markers'
                                 ), row=2, col=1)
                         
+                        # Forzar a que el eje X muestre exactamente desde el primer hasta el último día
+                        # Convertimos a string para evitar el error de JSON serializable con Kaleido
                         r_start = (min_date - timedelta(hours=12)).strftime('%Y-%m-%d %H:%M:%S')
                         r_end = (max_date + timedelta(hours=12)).strftime('%Y-%m-%d %H:%M:%S')
                         
@@ -1621,18 +1616,25 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                         )
                         fig_reporte.update_yaxes(title_text="Cantidad Reclamos", rangemode="tozero", gridcolor="#EAECEE", row=2, col=1)
 
+                # --- SECCIÓN 3: TABLA DETALLADA ---
+                # Definir colores de fila (rojo para novedades de la fecha objetivo)
                 colors_hoja = []
+                # Re-parsear fechas de la columna original para asegurar consistencia con el índice
                 fechas_tabla = pd.to_datetime(df_opl[col_f], dayfirst=True, errors='coerce') if col_f else [None]*len(df_opl)
                 
                 for f in fechas_tabla:
                     if pd.notna(f) and f == f_obj:
-                        colors_hoja.append('#FFCDD2')
+                        colors_hoja.append('#FFCDD2') # Rojo claro para novedad
                     else:
-                        colors_hoja.append('#F8F9F9')
+                        colors_hoja.append('#F8F9F9') # Gris muy claro/blanco normal
 
+                # Seleccionar columnas a mostrar (primeras 8 para no saturar imagen horizontal)
                 cols_viz = list(df_opl.columns[:8])
+                
+                # Reemplazar nombres de columnas largos o con espacios para el encabezado visual
                 headers_viz = [c.replace('nombre', '').replace('descripción', 'desc.').title() for c in cols_viz]
 
+                # Agregar traza de tabla en el Subplot fila 3
                 fig_reporte.add_trace(go.Table(
                     header=dict(
                         values=headers_viz,
@@ -1642,13 +1644,15 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                     ),
                     cells=dict(
                         values=[df_opl[c] for c in cols_viz],
-                        fill_color=[colors_hoja] * len(cols_viz),
+                        fill_color=[colors_hoja] * len(cols_viz), # Aplicar array de colores a cada columna
                         font=dict(color='black', size=11, family="Arial"),
                         align='left', height=28
                     )
                 ), row=3, col=1)
 
+                # 3. Ajustes finales de layout de la imagen unificada
                 n_filas = len(df_opl)
+                # Altura dinámica corregida: Base fija + proporcional a cantidad de filas de la tabla
                 dynamic_height = 800 + (n_filas * 35)
                 
                 fig_reporte.update_layout(
@@ -1656,7 +1660,7 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                         text=f"<b>REPORTE INTEGRAL DE ALERTAS OPL - FUMISCOR</b><br><sup>Total registros: {total_reclamos} | Novedades en rojo correspondientes al {f_obj_str}</sup>", 
                         font=dict(size=24, color="#1F2937")
                     ),
-                    width=1400,
+                    width=1400, # Ancho fijo horizontal ancho
                     height=dynamic_height, 
                     plot_bgcolor='white',
                     paper_bgcolor='white',
@@ -1665,11 +1669,15 @@ with st.expander("🚨 Generar Reporte Visual de Alertas OPL (Dashboard PNG)", e
                     legend=dict(orientation="h", yanchor="bottom", y=0.62, xanchor="center", x=0.5, bgcolor="rgba(255,255,255,0.8)")
                 )
 
+                # 4. Renderizado de la imagen final a bytes (PNG de alta resolución con scale=2)
                 img_bytes = fig_reporte.to_image(format="png", engine="kaleido", scale=2)
                 
                 st.success(f"✅ Dashboard visual generado exitosamente (detectadas {total_reclamos} OPLs). Previsualización a continuación:")
+                
+                # Mostrar previsualización en pantalla
                 st.image(img_bytes, use_container_width=True)
                 
+                # Botón de descarga de la imagen generada
                 st.download_button(
                     label="📥 Descargar Reporte OPL Unificado (PNG)",
                     data=img_bytes,
@@ -1700,7 +1708,7 @@ with st.expander("🛠️ Editor Manual de Datos (Ajustes antes de exportar el P
     if not df_metrics.empty:
         df_metrics = st.data_editor(
             df_metrics,
-            disabled=["Máquina"], 
+            disabled=["Máquina"], # Desbloqueamos TODAS las columnas numéricas
             hide_index=True,
             key="editor_kpi",
             use_container_width=True
@@ -1710,7 +1718,7 @@ with st.expander("🛠️ Editor Manual de Datos (Ajustes antes de exportar el P
 
     # --- 3. EDITAR PRODUCCIÓN ---
     st.markdown("#### 3. Modificar Desglose de Producción")
-    st.caption("Ajusta manually la cantidad de piezas Buenas, Retrabajo u Observadas por código de producto.")
+    st.caption("Ajusta manualmente la cantidad de piezas Buenas, Retrabajo u Observadas por código de producto.")
     if not pdf_df_prod_target.empty:
         pdf_df_prod_target = st.data_editor(
             pdf_df_prod_target,
@@ -1728,7 +1736,7 @@ with st.expander("🛠️ Editor Manual de Datos (Ajustes antes de exportar el P
     if not df_raw.empty:
         df_raw = st.data_editor(
             df_raw,
-            num_rows="dynamic", 
+            num_rows="dynamic", # Permite agregar o eliminar filas enteras
             column_config={
                 "Evento_Id": None,
                 "Categoria_Macro": None,
@@ -1762,6 +1770,7 @@ if maq_ocultas:
     df_trend = df_trend[~df_trend['Máquina'].isin(maq_ocultas)]
     if not df_horarios.empty:
         df_horarios = df_horarios[~df_horarios['Máquina'].isin(maq_ocultas)]
+
 
 # ==========================================
 # 6. INTERFAZ STREAMLIT FINAL (BOTONES)
