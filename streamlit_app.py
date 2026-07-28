@@ -125,7 +125,6 @@ def filtrar_piezas_h_fumiscor(df, lista_h, col_codigo='Código', threshold=0.85)
                 break
                 
     if codes_to_remove:
-        # Respetamos la excepción de planta y soldadura nueva
         mask_exenta = df['Máquina'].isin(MAQUINAS_EXENTAS_FILTRO_H)
         mask_eliminar = df[col_codigo].isin(codes_to_remove) & (~mask_exenta)
         return df[~mask_eliminar].copy()
@@ -178,7 +177,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code
             """
             
-            # CORREGIDO: Usamos PROD_M_01 en lugar de PROD_M_03 para tener ProductId sin error de SQL
+            # Consultamos PROD_M_01 para disponer de ProductId sin generar error SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -205,7 +204,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             """
             df_op_target = conn.query(q_op)
             
-            # CORREGIDO: Usamos PROD_M_01 en lugar de PROD_M_03 para poder filtrar tendencias
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina, pr.Code as Código,
                        SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
@@ -232,7 +230,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code
             """
             
-            # CORREGIDO: Usamos PROD_D_01 en lugar de PROD_D_03 para tener ProductId sin error de SQL
+            # Consultamos PROD_D_01 para disponer de ProductId sin generar error SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -299,7 +297,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_horarios = conn.query(q_horarios)
 
             if tipo_periodo == "Semanal":
-                # CORREGIDO: Usamos PROD_D_01 para evitar el error de SQL y permitir filtrado
                 q_trend_semanal = f"""
                     SELECT p.Date as Fecha_Filtro, c.Name as Máquina, pr.Code as Código,
                            SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
@@ -323,13 +320,15 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_prod_target = conn.query(q_prod)
         df_metrics_raw = conn.query(q_metrics)
 
+        # Vincular PRODUCT pr con EVENT_01 permite capturar qué pieza corría durante cada evento
         q_event = f"""
-            SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
+            SELECT e.Id as Evento_Id, c.Name as Máquina, pr.Code as Código, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], t1.Name as [Nivel Evento 1], t2.Name as [Nivel Evento 2], 
                    t3.Name as [Nivel Evento 3], t4.Name as [Nivel Evento 4], op.Name as Operador, 
                    e.Date as Fecha_Filtro, f.Name as Fábrica, tu.Name as Turno
             FROM EVENT_01 e
             LEFT JOIN CELL c ON e.CellId = c.CellId
+            LEFT JOIN PRODUCT pr ON e.ProductId = pr.ProductId
             LEFT JOIN EVENTTYPE t1 ON e.EventTypeLevel1 = t1.EventTypeId
             LEFT JOIN EVENTTYPE t2 ON e.EventTypeLevel2 = t2.EventTypeId
             LEFT JOIN EVENTTYPE t3 ON e.EventTypeLevel3 = t3.EventTypeId
@@ -348,6 +347,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
+            df_raw['Código'] = df_raw['Código'].fillna('SIN CÓDIGO')
 
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({'Operador': lambda x: ' / '.join(x.unique())}).reset_index()
@@ -399,7 +399,7 @@ with col_p1:
     ignorar_h = st.checkbox(
         "🚫 **Ignorar Piezas H (Proyectos)**", 
         value=False, 
-        help="Excluye piezas H en vivo desde Google Sheets recalculando todos los KPIs limpios (excepto en Planta Renault y soldadura nueva)."
+        help="Excluye piezas H recalculando KPIs, Producción y Eventos (excepto en Planta Renault y soldadura nueva)."
     )
 
 with col_p2:
@@ -436,17 +436,20 @@ with col_p2:
 df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics_raw, df_horarios = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio)
 
 # ==========================================
-# APLICACIÓN DE FILTRADO PIEZAS H Y RECÁLCULO LIMPIO
+# APLICACIÓN DE EXCLUSIÓN TOTAL (KPIs, PRODUCCIÓN Y EVENTOS)
 # ==========================================
 if ignorar_h:
     lista_h = fetch_piezas_h(URL_GS_H)
     if lista_h:
+        # 1. Purga total de producción objetivo
         pdf_df_prod_target = filtrar_piezas_h_fumiscor(pdf_df_prod_target, lista_h)
+        
+        # 2. Purga total de métricas crudas para recalcular OEE, Disponibilidad y Performance
         df_metrics_raw = filtrar_piezas_h_fumiscor(df_metrics_raw, lista_h)
+        
+        # 3. Purga y reagrupación de tendencias históricas
         if not df_trend.empty and 'Código' in df_trend.columns:
             df_trend = filtrar_piezas_h_fumiscor(df_trend, lista_h)
-            
-            # Reagrupamos las tendencias por Máquina tras eliminar las piezas para no duplicar barras en los gráficos
             group_cols = ['Month', 'Máquina'] if 'Month' in df_trend.columns else ['Fecha_Filtro', 'Máquina']
             df_trend = df_trend.groupby(group_cols).agg(
                 OEE_Num=('OEE_Num', 'sum'),
@@ -459,7 +462,14 @@ if ignorar_h:
             ).reset_index()
             df_trend['OEE'] = (df_trend['OEE_Num'] / df_trend['OEE_Den'].replace(0, pd.NA)).fillna(0)
             
-        st.toast(f"✅ Se ignoraron códigos de Piezas H en el cálculo global (excluyendo excepciones de planta).", icon="🚫")
+        # 4. Purga total de eventos en línea de tiempo (Producción, Fallas, Setups, Paradas)
+        if not df_raw.empty and 'Código' in df_raw.columns:
+            df_raw = filtrar_piezas_h_fumiscor(df_raw, lista_h)
+            # En máquinas NO exentas, eliminamos también cualquier evento categorizado como 'Proyecto'
+            mask_exenta = df_raw['Máquina'].isin(MAQUINAS_EXENTAS_FILTRO_H)
+            df_raw = df_raw[~( (df_raw['Estado_Global'] == 'Proyecto') & (~mask_exenta) )].copy()
+            
+        st.toast("✅ Exclusión total de Piezas H aplicada: Producción, Eventos y KPIs purgados.", icon="🚫")
 
 # Generación de métricas finales consolidadas y limpias por máquina
 df_metrics = recalcular_kpis_maquina(df_metrics_raw)
