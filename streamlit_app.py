@@ -108,7 +108,8 @@ def fetch_piezas_h(gs_url):
         st.warning(f"No se pudo cargar el listado de Google Sheets (Piezas H): {e}")
         return []
 
-def filtrar_piezas_h_fumiscor(df, lista_h, col_codigo='Código', threshold=0.85):
+# CAMBIO: Umbral al 80% (threshold=0.80)
+def filtrar_piezas_h_fumiscor(df, lista_h, col_codigo='Código', threshold=0.80):
     if df.empty or col_codigo not in df.columns or not lista_h: 
         return df
     
@@ -119,7 +120,7 @@ def filtrar_piezas_h_fumiscor(df, lista_h, col_codigo='Código', threshold=0.85)
         cod_upper = str(cod).strip().upper()
         for item in lista_h:
             item_upper = str(item).strip().upper()
-            if (len(cod_upper) > 5 and (cod_upper in item_upper or item_upper in cod_upper)) or \
+            if (len(cod_upper) > 4 and (cod_upper in item_upper or item_upper in cod_upper)) or \
                difflib.SequenceMatcher(None, cod_upper, item_upper).ratio() >= threshold:
                 codes_to_remove.add(cod)
                 break
@@ -158,6 +159,22 @@ def recalcular_kpis_maquina(df_metrics_raw):
     df_agg[cols_kpi] = df_agg[cols_kpi].fillna(0)
     
     return df_agg
+
+# CAMBIO CLAVE: Reagrupar tendencias antes de graficar para tener una sola barra
+def consolidar_tendencia(df_tr):
+    if df_tr.empty: return df_tr
+    group_cols = ['Month', 'Máquina'] if 'Month' in df_tr.columns else ['Fecha_Filtro', 'Máquina']
+    df_res = df_tr.groupby(group_cols).agg(
+        OEE_Num=('OEE_Num', 'sum'),
+        OEE_Den=('OEE_Den', 'sum'),
+        Disp_Num=('Disp_Num', 'sum'),
+        Perf_Num=('Perf_Num', 'sum'),
+        T_Operativo=('T_Operativo', 'sum'),
+        Cal_Num=('Cal_Num', 'sum'),
+        Piezas_Totales=('Piezas_Totales', 'sum')
+    ).reset_index()
+    df_res['OEE'] = (df_res['OEE_Num'] / df_res['OEE_Den'].replace(0, pd.NA)).fillna(0)
+    return df_res
 
 @st.cache_data(ttl=300)
 def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
@@ -318,7 +335,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_prod_target = conn.query(q_prod)
         df_metrics_raw = conn.query(q_metrics)
 
-        # CORREGIDO: Eliminamos el JOIN a PRODUCT en EVENT_01 para evitar el error 'Invalid column name ProductId'
         q_event = f"""
             SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], t1.Name as [Nivel Evento 1], t2.Name as [Nivel Evento 2], 
@@ -395,7 +411,7 @@ with col_p1:
     ignorar_h = st.checkbox(
         "🚫 **Ignorar Piezas H (Proyectos)**", 
         value=False, 
-        help="Excluye piezas H recalculando KPIs, Producción y Eventos (excepto en Planta Renault y soldadura nueva)."
+        help="Excluye piezas al 80% de coincidencia recalculando todos los KPIs y consolidando en una sola barra por máquina."
     )
 
 with col_p2:
@@ -432,46 +448,24 @@ with col_p2:
 df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics_raw, df_horarios = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio)
 
 # ==========================================
-# APLICACIÓN DE EXCLUSIÓN TOTAL (KPIs, PRODUCCIÓN Y EVENTOS)
+# APLICACIÓN DE EXCLUSIÓN AL 80% Y CONSOLIDACIÓN DE TENDENCIAS
 # ==========================================
 if ignorar_h:
     lista_h = fetch_piezas_h(URL_GS_H)
     if lista_h:
-        # 1. Purga total de producción objetivo
-        pdf_df_prod_target = filtrar_piezas_h_fumiscor(pdf_df_prod_target, lista_h)
-        
-        # 2. Purga total de métricas crudas para recalcular OEE, Disponibilidad y Performance
-        df_metrics_raw = filtrar_piezas_h_fumiscor(df_metrics_raw, lista_h)
-        
-        # 3. Purga y reagrupación de tendencias históricas
+        pdf_df_prod_target = filtrar_piezas_h_fumiscor(pdf_df_prod_target, lista_h, threshold=0.80)
+        df_metrics_raw = filtrar_piezas_h_fumiscor(df_metrics_raw, lista_h, threshold=0.80)
         if not df_trend.empty and 'Código' in df_trend.columns:
-            df_trend = filtrar_piezas_h_fumiscor(df_trend, lista_h)
-            group_cols = ['Month', 'Máquina'] if 'Month' in df_trend.columns else ['Fecha_Filtro', 'Máquina']
-            df_trend = df_trend.groupby(group_cols).agg(
-                OEE_Num=('OEE_Num', 'sum'),
-                OEE_Den=('OEE_Den', 'sum'),
-                Disp_Num=('Disp_Num', 'sum'),
-                Perf_Num=('Perf_Num', 'sum'),
-                T_Operativo=('T_Operativo', 'sum'),
-                Cal_Num=('Cal_Num', 'sum'),
-                Piezas_Totales=('Piezas_Totales', 'sum')
-            ).reset_index()
-            df_trend['OEE'] = (df_trend['OEE_Num'] / df_trend['OEE_Den'].replace(0, pd.NA)).fillna(0)
+            df_trend = filtrar_piezas_h_fumiscor(df_trend, lista_h, threshold=0.80)
             
-        # 4. Purga total de eventos de proyecto en línea de tiempo (Fallas, Setups, Paradas de proyecto)
         if not df_raw.empty:
             mask_exenta = df_raw['Máquina'].isin(MAQUINAS_EXENTAS_FILTRO_H)
-            # Eliminamos eventos categorizados como Proyecto en máquinas no exentas
-            df_raw = df_raw[
-                ~(
-                    (df_raw['Estado_Global'] == 'Proyecto')
-                    & (~mask_exenta)
-                )
-            ].copy()
+            df_raw = df_raw[~( (df_raw['Estado_Global'] == 'Proyecto') & (~mask_exenta) )].copy()
             
-        st.toast("✅ Exclusión total de Piezas H aplicada: Producción, Eventos y KPIs purgados.", icon="🚫")
+        st.toast("✅ Exclusión al 80% aplicada: KPIs y tendencias listos sin encimado.", icon="🚫")
 
-# Generación de métricas finales consolidadas y limpias por máquina
+# Reagrupamos SIEMPRE las tendencias por Mes+Máquina para tener UNA SOLA BARRA limpia
+df_trend = consolidar_tendencia(df_trend)
 df_metrics = recalcular_kpis_maquina(df_metrics_raw)
 
 # ==========================================
