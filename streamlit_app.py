@@ -177,7 +177,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code
             """
             
-            # Consultamos PROD_M_01 para disponer de ProductId sin generar error SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -230,7 +229,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code
             """
             
-            # Consultamos PROD_D_01 para disponer de ProductId sin generar error SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -320,15 +318,14 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_prod_target = conn.query(q_prod)
         df_metrics_raw = conn.query(q_metrics)
 
-        # Vincular PRODUCT pr con EVENT_01 permite capturar qué pieza corría durante cada evento
+        # CORREGIDO: Eliminamos el JOIN a PRODUCT en EVENT_01 para evitar el error 'Invalid column name ProductId'
         q_event = f"""
-            SELECT e.Id as Evento_Id, c.Name as Máquina, pr.Code as Código, e.Started as Inicio, e.Finish as Fin, 
+            SELECT e.Id as Evento_Id, c.Name as Máquina, e.Started as Inicio, e.Finish as Fin, 
                    e.Interval as [Tiempo (Min)], t1.Name as [Nivel Evento 1], t2.Name as [Nivel Evento 2], 
                    t3.Name as [Nivel Evento 3], t4.Name as [Nivel Evento 4], op.Name as Operador, 
                    e.Date as Fecha_Filtro, f.Name as Fábrica, tu.Name as Turno
             FROM EVENT_01 e
             LEFT JOIN CELL c ON e.CellId = c.CellId
-            LEFT JOIN PRODUCT pr ON e.ProductId = pr.ProductId
             LEFT JOIN EVENTTYPE t1 ON e.EventTypeLevel1 = t1.EventTypeId
             LEFT JOIN EVENTTYPE t2 ON e.EventTypeLevel2 = t2.EventTypeId
             LEFT JOIN EVENTTYPE t3 ON e.EventTypeLevel3 = t3.EventTypeId
@@ -347,7 +344,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_raw['Fin_Str'] = pd.to_datetime(df_raw['Fin']).dt.strftime('%H:%M')
             df_raw['Tiempo (Min)'] = pd.to_numeric(df_raw['Tiempo (Min)'], errors='coerce').fillna(0)
             df_raw['Operador'] = df_raw['Operador'].fillna('-')
-            df_raw['Código'] = df_raw['Código'].fillna('SIN CÓDIGO')
 
             cols_grupo = [c for c in df_raw.columns if c != 'Operador']
             df_raw = df_raw.groupby(cols_grupo, dropna=False).agg({'Operador': lambda x: ' / '.join(x.unique())}).reset_index()
@@ -462,12 +458,16 @@ if ignorar_h:
             ).reset_index()
             df_trend['OEE'] = (df_trend['OEE_Num'] / df_trend['OEE_Den'].replace(0, pd.NA)).fillna(0)
             
-        # 4. Purga total de eventos en línea de tiempo (Producción, Fallas, Setups, Paradas)
-        if not df_raw.empty and 'Código' in df_raw.columns:
-            df_raw = filtrar_piezas_h_fumiscor(df_raw, lista_h)
-            # En máquinas NO exentas, eliminamos también cualquier evento categorizado como 'Proyecto'
+        # 4. Purga total de eventos de proyecto en línea de tiempo (Fallas, Setups, Paradas de proyecto)
+        if not df_raw.empty:
             mask_exenta = df_raw['Máquina'].isin(MAQUINAS_EXENTAS_FILTRO_H)
-            df_raw = df_raw[~( (df_raw['Estado_Global'] == 'Proyecto') & (~mask_exenta) )].copy()
+            # Eliminamos eventos categorizados como Proyecto en máquinas no exentas
+            df_raw = df_raw[
+                ~(
+                    (df_raw['Estado_Global'] == 'Proyecto')
+                    & (~mask_exenta)
+                )
+            ].copy()
             
         st.toast("✅ Exclusión total de Piezas H aplicada: Producción, Eventos y KPIs purgados.", icon="🚫")
 
