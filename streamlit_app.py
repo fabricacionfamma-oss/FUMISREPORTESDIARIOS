@@ -178,7 +178,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code
             """
             
-            # Agregamos pr.Code en el SELECT y el JOIN para poder filtrar por pieza y recalcular
+            # CORREGIDO: Usamos PROD_M_01 en lugar de PROD_M_03 para tener ProductId sin error de SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -187,7 +187,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
                        SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                        SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as Oee_Num
-                FROM PROD_M_03 p 
+                FROM PROD_M_01 p 
                 JOIN CELL c ON p.CellId = c.CellId
                 JOIN PRODUCT pr ON p.ProductId = pr.ProductId
                 WHERE p.Month = {mes} AND p.Year = {anio}
@@ -205,6 +205,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             """
             df_op_target = conn.query(q_op)
             
+            # CORREGIDO: Usamos PROD_M_01 en lugar de PROD_M_03 para poder filtrar tendencias
             q_trend = f"""
                 SELECT p.Month, c.Name as Máquina, pr.Code as Código,
                        SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
@@ -215,7 +216,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        SUM(p.ProductiveTime) as T_Operativo,
                        SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                        SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                FROM PROD_M_03 p 
+                FROM PROD_M_01 p 
                 JOIN CELL c ON p.CellId = c.CellId
                 JOIN PRODUCT pr ON p.ProductId = pr.ProductId
                 WHERE p.Year = {anio} AND p.Month <= {mes}
@@ -231,6 +232,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code
             """
             
+            # CORREGIDO: Usamos PROD_D_01 en lugar de PROD_D_03 para tener ProductId sin error de SQL
             q_metrics = f"""
                 SELECT c.Name as Máquina, pr.Code as Código,
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -239,7 +241,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
                        SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                        SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as Oee_Num
-                FROM PROD_D_03 p 
+                FROM PROD_D_01 p 
                 JOIN CELL c ON p.CellId = c.CellId
                 JOIN PRODUCT pr ON p.ProductId = pr.ProductId
                 WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
@@ -297,6 +299,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
             df_horarios = conn.query(q_horarios)
 
             if tipo_periodo == "Semanal":
+                # CORREGIDO: Usamos PROD_D_01 para evitar el error de SQL y permitir filtrado
                 q_trend_semanal = f"""
                     SELECT p.Date as Fecha_Filtro, c.Name as Máquina, pr.Code as Código,
                            SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
@@ -307,7 +310,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                            SUM(p.ProductiveTime) as T_Operativo,
                            SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                            SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                    FROM PROD_D_03 p 
+                    FROM PROD_D_01 p 
                     JOIN CELL c ON p.CellId = c.CellId
                     JOIN PRODUCT pr ON p.ProductId = pr.ProductId
                     WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
@@ -442,6 +445,20 @@ if ignorar_h:
         df_metrics_raw = filtrar_piezas_h_fumiscor(df_metrics_raw, lista_h)
         if not df_trend.empty and 'Código' in df_trend.columns:
             df_trend = filtrar_piezas_h_fumiscor(df_trend, lista_h)
+            
+            # Reagrupamos las tendencias por Máquina tras eliminar las piezas para no duplicar barras en los gráficos
+            group_cols = ['Month', 'Máquina'] if 'Month' in df_trend.columns else ['Fecha_Filtro', 'Máquina']
+            df_trend = df_trend.groupby(group_cols).agg(
+                OEE_Num=('OEE_Num', 'sum'),
+                OEE_Den=('OEE_Den', 'sum'),
+                Disp_Num=('Disp_Num', 'sum'),
+                Perf_Num=('Perf_Num', 'sum'),
+                T_Operativo=('T_Operativo', 'sum'),
+                Cal_Num=('Cal_Num', 'sum'),
+                Piezas_Totales=('Piezas_Totales', 'sum')
+            ).reset_index()
+            df_trend['OEE'] = (df_trend['OEE_Num'] / df_trend['OEE_Den'].replace(0, pd.NA)).fillna(0)
+            
         st.toast(f"✅ Se ignoraron códigos de Piezas H en el cálculo global (excluyendo excepciones de planta).", icon="🚫")
 
 # Generación de métricas finales consolidadas y limpias por máquina
