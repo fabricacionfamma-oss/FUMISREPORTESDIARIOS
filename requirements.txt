@@ -5,3 +5,4 @@ fpdf
 SQLAlchemy
 pymssql
 kaleido
+starlette<0.40.0
