@@ -85,12 +85,10 @@ st.divider()
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_piezas_h():
-    # URL de exportación CSV directa desde Google Sheets
     url = "https://docs.google.com/spreadsheets/d/1mLnIC8B7mwmFZwthO0A32H3ZFfXSKt7vIUMBXEZxDJ0/export?format=csv&gid=0"
     try:
         df_h = pd.read_csv(url, header=None)
         piezas = df_h.iloc[:, 0].dropna().astype(str).str.strip().tolist()
-        # Filtramos encabezados si los hay
         return [p for p in piezas if p and p.lower() not in ['codigo', 'código', 'pieza', 'piezas']]
     except Exception as e:
         st.error(f"Error al cargar piezas H desde Google Sheets: {e}")
@@ -109,17 +107,10 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
         df_trend = pd.DataFrame()
         df_horarios = pd.DataFrame()
 
-        # Condicionales para ignorar piezas H
         prod_where = ""
-        metrics_join = ""
-        metrics_where = ""
-        
         if lista_piezas_h:
             piezas_str = ", ".join([f"'{p}'" for p in lista_piezas_h])
             prod_where = f" AND pr.Code NOT IN ({piezas_str}) "
-            # Para las tablas 03, enlazamos a PRODUCT para poder filtrar por código
-            metrics_join = " LEFT JOIN PRODUCT pr ON p.ProductId = pr.ProductId "
-            metrics_where = f" AND (pr.Code IS NULL OR pr.Code NOT IN ({piezas_str})) "
 
         if tipo_periodo == "Mensual":
             q_prod = f"""
@@ -130,20 +121,35 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
                 GROUP BY c.Name, pr.Code
             """
             
-            q_metrics = f"""
-                SELECT c.Name as Máquina, 
-                       SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
-                       SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
-                       (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
-                       (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
-                       (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
-                       (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
-                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
-                WHERE p.Month = {mes} AND p.Year = {anio} {metrics_where}
-                GROUP BY c.Name
-            """
+            # Si hay filtro, tomamos métricas construyendo el promedio ponderado desde PROD_M_01
+            if lista_piezas_h:
+                q_metrics = f"""
+                    SELECT c.Name as Máquina, 
+                           SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                           SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
+                           (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
+                           (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
+                           (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
+                    FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                    WHERE p.Month = {mes} AND p.Year = {anio} {prod_where}
+                    GROUP BY c.Name
+                """
+            else:
+                q_metrics = f"""
+                    SELECT c.Name as Máquina, 
+                           SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                           SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
+                           (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
+                           (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
+                           (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
+                    FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId
+                    WHERE p.Month = {mes} AND p.Year = {anio}
+                    GROUP BY c.Name
+                """
 
-            # ESTÁNDAR (SIN EXCLUIR PIEZAS H) PARA COMPARATIVA DE REFERENCIA
+            # ESTÁNDAR (SIN EXCLUIR PIEZAS H) PARA COMPARATIVA DE REFERENCIA EN SUBTÍTULOS GRISES
             q_metrics_std = f"""
                 SELECT c.Name as Máquina, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -168,20 +174,36 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
             """
             df_op_target = conn.query(q_op)
             
-            q_trend = f"""
-                SELECT p.Month, c.Name as Máquina,
-                       SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
-                       SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
-                       (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
-                       SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
-                       SUM(p.Performance * p.ProductiveTime) as Perf_Num,
-                       SUM(p.ProductiveTime) as T_Operativo,
-                       SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
-                       SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
-                WHERE p.Year = {anio} AND p.Month <= {mes} {metrics_where}
-                GROUP BY p.Month, c.Name
-            """
+            if lista_piezas_h:
+                q_trend = f"""
+                    SELECT p.Month, c.Name as Máquina,
+                           SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
+                           SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
+                           SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
+                           SUM(p.Performance * p.ProductiveTime) as Perf_Num,
+                           SUM(p.ProductiveTime) as T_Operativo,
+                           SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
+                           SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
+                    FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                    WHERE p.Year = {anio} AND p.Month <= {mes} {prod_where}
+                    GROUP BY p.Month, c.Name
+                """
+            else:
+                q_trend = f"""
+                    SELECT p.Month, c.Name as Máquina,
+                           SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
+                           SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
+                           SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
+                           SUM(p.Performance * p.ProductiveTime) as Perf_Num,
+                           SUM(p.ProductiveTime) as T_Operativo,
+                           SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
+                           SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
+                    FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId 
+                    WHERE p.Year = {anio} AND p.Month <= {mes}
+                    GROUP BY p.Month, c.Name
+                """
             df_trend = conn.query(q_trend)
             
         else:
@@ -193,20 +215,33 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
                 GROUP BY c.Name, pr.Code
             """
             
-            q_metrics = f"""
-                SELECT c.Name as Máquina, 
-                       SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
-                       SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
-                       (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
-                       (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
-                       (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
-                       (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
-                FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {metrics_where}
-                GROUP BY c.Name
-            """
+            if lista_piezas_h:
+                q_metrics = f"""
+                    SELECT c.Name as Máquina, 
+                           SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                           SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
+                           (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
+                           (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
+                           (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
+                    FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId
+                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {prod_where}
+                    GROUP BY c.Name
+                """
+            else:
+                q_metrics = f"""
+                    SELECT c.Name as Máquina, 
+                           SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
+                           SUM(p.ProductiveTime) as T_Operativo, SUM(p.DownTime) as T_Parada,
+                           (SUM(p.Performance * p.ProductiveTime) / NULLIF(SUM(p.ProductiveTime), 0)) as PERFORMANCE,
+                           (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
+                           (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
+                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
+                    FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId
+                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
+                    GROUP BY c.Name
+                """
 
-            # ESTÁNDAR (SIN EXCLUIR PIEZAS H) PARA COMPARATIVA DE REFERENCIA
             q_metrics_std = f"""
                 SELECT c.Name as Máquina, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -234,7 +269,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
                 df_op_raw['ProductiveTime'] = pd.to_numeric(df_op_raw['ProductiveTime'], errors='coerce').fillna(0)
                 df_op_raw['Perf_Num'] = df_op_raw['Performance'] * df_op_raw['ProductiveTime']
                 
-                # CORRECCIÓN PARA OPERARIOS
                 df_op_raw['Fábrica'] = df_op_raw['Fábrica'].fillna('No Asignada')
                 
                 df_op_target = df_op_raw.groupby(['Operador', 'Fábrica']).agg(
@@ -246,7 +280,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
             else:
                 df_op_target = pd.DataFrame()
 
-            # --- CONSULTA DE HORARIOS DE TURNOS ---
             q_horarios = f"""
                 WITH Tiempos_Turno AS (
                     SELECT CellId, TurnId, Date as Dia,
@@ -274,20 +307,36 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
             df_horarios = conn.query(q_horarios)
 
             if tipo_periodo == "Semanal":
-                q_trend_semanal = f"""
-                    SELECT p.Date as Fecha_Filtro, c.Name as Máquina,
-                           SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
-                           SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
-                           (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
-                           SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
-                           SUM(p.Performance * p.ProductiveTime) as Perf_Num,
-                           SUM(p.ProductiveTime) as T_Operativo,
-                           SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
-                           SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                    FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
-                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {metrics_where}
-                    GROUP BY p.Date, c.Name
-                """
+                if lista_piezas_h:
+                    q_trend_semanal = f"""
+                        SELECT p.Date as Fecha_Filtro, c.Name as Máquina,
+                               SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
+                               SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
+                               (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
+                               SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
+                               SUM(p.Performance * p.ProductiveTime) as Perf_Num,
+                               SUM(p.ProductiveTime) as T_Operativo,
+                               SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
+                               SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
+                        FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                        WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {prod_where}
+                        GROUP BY p.Date, c.Name
+                    """
+                else:
+                    q_trend_semanal = f"""
+                        SELECT p.Date as Fecha_Filtro, c.Name as Máquina,
+                               SUM(p.Oee * (p.ProductiveTime + p.DownTime)) as OEE_Num,
+                               SUM(p.ProductiveTime + p.DownTime) as OEE_Den,
+                               (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE,
+                               SUM(p.Availability * (p.ProductiveTime + p.DownTime)) as Disp_Num,
+                               SUM(p.Performance * p.ProductiveTime) as Perf_Num,
+                               SUM(p.ProductiveTime) as T_Operativo,
+                               SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
+                               SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
+                        FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId
+                        WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
+                        GROUP BY p.Date, c.Name
+                    """
                 df_trend = conn.query(q_trend_semanal)
             else:
                 df_trend = pd.DataFrame()
@@ -403,6 +452,9 @@ with col_p2:
     st.markdown("---")
     ignorar_piezas_h = st.checkbox("Ignorar piezas H (Proyecto H)", value=False)
     lista_piezas_h = get_piezas_h() if ignorar_piezas_h else []
+    
+    if ignorar_piezas_h:
+        st.success("✅ **Filtro Aplicado:** Se excluirá la producción y tiempos de las piezas H basándose en los registros nativos detallados por producto de la base de datos.")
 
 df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics, df_horarios, df_metrics_std = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio, lista_piezas_h=lista_piezas_h)
 
@@ -491,7 +543,7 @@ def print_pdf_metric_row(pdf, prefix, m, m_std=None):
     
     pdf.set_text_color(0, 0, 0); pdf.ln(7)
 
-    # Imprimir línea secundaria con el OEE original (sin exclusiones) si difiere o si se mandó
+    # Imprimir línea secundaria con el OEE original (sin exclusiones)
     if m_std is not None and m_std.get('OEE', 0) != m.get('OEE', 0):
         pdf.set_font("Arial", 'I', 8); pdf.set_text_color(120, 120, 120)
         pdf.cell(10) # Margen izquierdo
@@ -524,7 +576,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
     if lista_piezas_h:
         pdf.set_font("Arial", 'I', 8); pdf.set_text_color(220, 20, 20)
         piezas_str = ", ".join(lista_piezas_h)
-        pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales ignorando la producción de las piezas H: {piezas_str}"))
+        pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las piezas H: {piezas_str}"))
         pdf.ln(3)
 
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
@@ -813,12 +865,11 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         # 1. RESUMEN OEE DEL GRUPO
         check_space(pdf, 30); print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         
-        # Insertar nota aclaratoria de piezas H omitidas si corresponde
         if lista_piezas_h:
             pdf.set_font("Arial", 'I', 8)
             pdf.set_text_color(220, 20, 20)
             piezas_str = ", ".join(lista_piezas_h)
-            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales ignorando la producción de las piezas H: {piezas_str}"))
+            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las piezas H: {piezas_str}"))
             pdf.ln(2)
 
         g_plan = 0; g_op = 0; g_buenas = 0; g_totales = 0
@@ -986,7 +1037,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                                 day_data = group[group['Weekday'] == day_idx]
                                 if not day_data.empty:
                                     rango = day_data.iloc[0]['Rango']
-                                    # Formato simple de texto para semanal sin colores extraños
                                     pdf.cell(w_day, 5, rango, 1, 0 if day_idx < 4 else 1, 'C')
                                 else:
                                     pdf.cell(w_day, 5, "", 1, 0 if day_idx < 4 else 1, 'C')
@@ -1013,7 +1063,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             pdf.cell(w_maq, 5, " " + clean_text(r_hor['Máquina']), 1, 0, 'L')
                             pdf.cell(w_tur, 5, clean_text(r_hor['Turno']), 1, 0, 'C')
                             
-                            # --- COLOR PARA HORA INICIO SOLO EN DIARIO ---
                             hora_ini = str(r_hor['Hora_Inicio'])
                             try:
                                 h, m = map(int, hora_ini.split(':'))
@@ -1029,7 +1078,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                             
                             pdf.cell(w_hor, 5, hora_ini, 1, 0, 'C')
                             
-                            # --- COLOR PARA HORA CIERRE SOLO EN DIARIO ---
                             hora_fin = str(r_hor['Hora_Cierre'])
                             try:
                                 h_f, m_f = map(int, hora_fin.split(':'))
@@ -1044,7 +1092,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                                 pdf.set_text_color(50, 50, 50)
 
                             pdf.cell(w_hor, 5, clean_text(r_hor['Hora_Cierre']), 1, 0, 'C')
-                            pdf.set_text_color(50, 50, 50) # Restaurar color por defecto
+                            pdf.set_text_color(50, 50, 50)
                             
                             apertura_str = mins_to_duration_str(r_hor.get('Apertura_Neta_Min', 0))
                             no_reg_str = mins_to_duration_str(r_hor.get('No_Registrado_Min', 0))
@@ -1082,7 +1130,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         pdf.cell(38, 5, clean_text(mins_to_duration_str(t_proy_g)), border=1, align='C')
         pdf.cell(38, 5, clean_text(mins_to_duration_str(t_desc_g)), border=1, align='C', ln=True); pdf.ln(4)
         
-        # --- Análisis de Fallas + Tendencias Temporales (CORREGIDO) ---
+        # --- Análisis de Fallas + Tendencias Temporales (CORREGIDO CRONOLÓGICAMENTE) ---
         check_space(pdf, 170)
         print_section_title(pdf, "Análisis de Fallas, Tendencias y Estructura Visual", theme_color)
 
@@ -1093,7 +1141,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             agg_f15['Label'] = agg_f15.apply(lambda r: f" {str(r['Detalle_Final'])[:60]} — {r['Tiempo (Min)']:.0f}m", axis=1)
             max_x_val = agg_f15['Tiempo (Min)'].max() if not agg_f15.empty else 1
             
-            # Ajuste de Fecha/Hora para gráfico cronológico coherente
+            # Corrección cronológica con datetime real para que las líneas no vuelvan atrás
             if p_tipo == "Diario":
                 df_g_fallas['Eje_Temp'] = pd.to_datetime(df_g_fallas['Inicio']).dt.floor('h')
                 fmt_tick = '%H:%M'
@@ -1115,7 +1163,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
             fig_top15.update_layout(height=250, width=450, margin=dict(t=5, b=5, l=10, r=220), plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(visible=False, range=[0, max_x_val * 1.5]), yaxis=dict(title='', showticklabels=False))
             
             fig_trend = px.line(trend_df, x='Eje_Temp', y='Tiempo (Min)', color='Máquina', markers=True, color_discrete_sequence=px.colors.qualitative.Set1)
-            fig_trend.update_xaxes(tickformat=fmt_tick) # Forzamos el formato deseado
+            fig_trend.update_xaxes(tickformat=fmt_tick) # Fuerza formato cronológico seguro
             fig_trend.update_layout(height=250, width=400, margin=dict(t=10, b=30, l=40, r=20), plot_bgcolor='rgba(0,0,0,0)', xaxis_title="", yaxis_title="Minutos", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title=""))
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
