@@ -1250,7 +1250,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         df_paradas_g = df_pdf_g[df_pdf_g['Estado_Global'] == 'Parada Programada'].copy()
 
         if not df_paradas_g.empty:
-            if p_tipo == "Mensual":
+            if p_tipo in ["Mensual", "Semanal"]:
                 resumen_paradas = df_paradas_g.groupby('Detalle_Final').agg(
                     Total_Min=('Tiempo (Min)', 'sum'),
                     Cantidad=('Tiempo (Min)', 'count')
@@ -1259,7 +1259,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 resumen_paradas = resumen_paradas.sort_values('Total_Min', ascending=False)
 
                 pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*theme_color)
-                pdf.cell(0, 6, clean_text(">> Resumen por Tipo de Parada Programada:"), ln=True)
+                pdf.cell(0, 6, clean_text(">> Resumen por Tipo de Parada Programada (Promedios):"), ln=True)
                 
                 setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
                 pdf.cell(80, 6, "Tipo de Evento", 1, 0, 'C', True)
@@ -1283,58 +1283,6 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                     pdf.cell(30, 5, str(int(r_res['Cantidad'])), 1, 0, 'C')
                     pdf.cell(30, 5, f"{r_res['Promedio']:.1f}", 1, 1, 'C')
                 pdf.ln(5)
-
-                pdf.set_font("Arial", 'B', 10); pdf.set_text_color(*theme_color)
-                pdf.cell(0, 6, clean_text(">> Listado Detallado por Tipo de Parada:"), ln=True)
-
-                def dibujar_cabeza_paradas_mensual():
-                    setup_table_header(pdf, theme_color); pdf.set_font("Arial", 'B', 8)
-                    pdf.cell(20, 6, "Fecha", 1, 0, 'C', True)
-                    pdf.cell(30, 6, "Maquina", 1, 0, 'C', True)
-                    pdf.cell(15, 6, "Inicio", 1, 0, 'C', True)
-                    pdf.cell(15, 6, "Fin", 1, 0, 'C', True)
-                    pdf.cell(20, 6, "Duracion", 1, 0, 'C', True)
-                    pdf.cell(90, 6, "Descripcion de la Parada", 1, 1, 'C', True)
-
-                for tipo_ev in resumen_paradas['Detalle_Final']:
-                    df_tipo = df_paradas_g[df_paradas_g['Detalle_Final'] == tipo_ev].sort_values(['Fecha_Filtro', 'Máquina', 'Inicio'])
-                    
-                    check_space(pdf, 20)
-                    pdf.set_font("Arial", 'B', 9); pdf.set_text_color(*comp_color)
-                    pdf.cell(0, 6, clean_text(f"  Grupo de Eventos: {tipo_ev}"), ln=True)
-                    
-                    dibujar_cabeza_paradas_mensual()
-                    setup_table_row(pdf); pdf.set_font("Arial", '', 8)
-                    
-                    fill_toggle_p = False
-                    for _, r_par in df_tipo.iterrows():
-                        if pdf.get_y() > 265:
-                            pdf.add_page(); dibujar_cabeza_paradas_mensual(); setup_table_row(pdf); pdf.set_font("Arial", '', 8)
-                        
-                        if fill_toggle_p:
-                            if area.upper() == "ESTAMPADO":
-                                pdf.set_fill_color(235, 243, 250)
-                            else:
-                                pdf.set_fill_color(253, 242, 233)
-                        else:
-                            pdf.set_fill_color(255, 255, 255)
-                            
-                        f_str = pd.to_datetime(r_par['Fecha_Filtro']).strftime('%d/%m') if pd.notna(r_par['Fecha_Filtro']) else "-"
-                        maq_str = clean_text(str(r_par['Máquina']))[:15]
-                        ini_str = clean_text(str(r_par['Inicio_Str']))
-                        fin_str = clean_text(str(r_par['Fin_Str']))
-                        dur_str = f"{r_par['Tiempo (Min)']:.0f} min"
-                        desc_str = clean_text(str(r_par['Detalle_Final']))[:55]
-
-                        pdf.cell(20, 5, f_str, 1, 0, 'C', True)
-                        pdf.cell(30, 5, " " + maq_str, 1, 0, 'L', True)
-                        pdf.cell(15, 5, ini_str, 1, 0, 'C', True)
-                        pdf.cell(15, 5, fin_str, 1, 0, 'C', True)
-                        pdf.cell(20, 5, dur_str, 1, 0, 'C', True)
-                        pdf.cell(90, 5, " " + desc_str, 1, 1, 'L', True)
-
-                        fill_toggle_p = not fill_toggle_p
-                    pdf.ln(4)
 
             else:
                 df_paradas_g = df_paradas_g.sort_values(['Máquina', 'Inicio'])
