@@ -106,6 +106,7 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
 
         df_trend = pd.DataFrame()
         df_horarios = pd.DataFrame()
+        df_piezas_excluidas = pd.DataFrame(columns=['Máquina', 'Code'])
 
         prod_where = ""
         if lista_piezas_h:
@@ -113,6 +114,17 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
             prod_where = f" AND pr.Code NOT IN ({piezas_str}) "
 
         if tipo_periodo == "Mensual":
+            # Extraer las piezas que EFECTIVAMENTE tuvieron producción para informar
+            if lista_piezas_h:
+                q_excluidas = f"""
+                    SELECT DISTINCT c.Name as Máquina, pr.Code
+                    FROM PROD_M_01 p 
+                    JOIN CELL c ON p.CellId = c.CellId 
+                    JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                    WHERE p.Month = {mes} AND p.Year = {anio} AND pr.Code IN ({piezas_str})
+                """
+                df_piezas_excluidas = conn.query(q_excluidas)
+
             q_prod = f"""
                 SELECT c.Name as Máquina, pr.Code as Código, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
@@ -121,7 +133,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
                 GROUP BY c.Name, pr.Code
             """
             
-            # Si hay filtro, tomamos métricas construyendo el promedio ponderado desde PROD_M_01
             if lista_piezas_h:
                 q_metrics = f"""
                     SELECT c.Name as Máquina, 
@@ -149,7 +160,6 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
                     GROUP BY c.Name
                 """
 
-            # ESTÁNDAR (SIN EXCLUIR PIEZAS H) PARA COMPARATIVA DE REFERENCIA EN SUBTÍTULOS GRISES
             q_metrics_std = f"""
                 SELECT c.Name as Máquina, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas,
@@ -207,6 +217,16 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
             df_trend = conn.query(q_trend)
             
         else:
+            if lista_piezas_h:
+                q_excluidas = f"""
+                    SELECT DISTINCT c.Name as Máquina, pr.Code
+                    FROM PROD_D_01 p 
+                    JOIN CELL c ON p.CellId = c.CellId 
+                    JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
+                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' AND pr.Code IN ({piezas_str})
+                """
+                df_piezas_excluidas = conn.query(q_excluidas)
+
             q_prod = f"""
                 SELECT c.Name as Máquina, pr.Code as Código, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
@@ -403,11 +423,11 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, 
 
             df_raw['Detalle_Final'] = df_raw.apply(obtener_ultimo_nivel, axis=1)
 
-        return df_raw, df_prod_target, df_op_target, df_trend, df_metrics, df_horarios, df_metrics_std
+        return df_raw, df_prod_target, df_op_target, df_trend, df_metrics, df_horarios, df_metrics_std, df_piezas_excluidas
 
     except Exception as e:
         st.error(f"Error ejecutando consulta a base de datos wii_bi: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # ==========================================
 # 3. INTERFAZ: CONFIGURACIÓN PERIODO
@@ -454,9 +474,9 @@ with col_p2:
     lista_piezas_h = get_piezas_h() if ignorar_piezas_h else []
     
     if ignorar_piezas_h:
-        st.success("✅ **Filtro Aplicado:** Se excluirá la producción y tiempos de las piezas H basándose en los registros nativos detallados por producto de la base de datos.")
+        st.success("✅ **Filtro Activado:** Se omitirán del reporte las piezas H que efectivamente hayan tenido producción en este período.")
 
-df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics, df_horarios, df_metrics_std = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio, lista_piezas_h=lista_piezas_h)
+df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics, df_horarios, df_metrics_std, df_piezas_excluidas = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio, lista_piezas_h=lista_piezas_h)
 
 # ==========================================
 # 4. FUNCIONES HELPER PDF
@@ -547,7 +567,7 @@ def print_pdf_metric_row(pdf, prefix, m, m_std=None):
     if m_std is not None and m_std.get('OEE', 0) != m.get('OEE', 0):
         pdf.set_font("Arial", 'I', 8); pdf.set_text_color(120, 120, 120)
         pdf.cell(10) # Margen izquierdo
-        pdf.write(5, clean_text(f"(Con piezas H - OEE: {m_std.get('OEE', 0):.1f}% | Disp: {m_std.get('DISPONIBILIDAD', 0):.1f}% | Perf: {m_std.get('PERFORMANCE', 0):.1f}% | Cal: {m_std.get('CALIDAD', 0):.1f}%)"))
+        pdf.write(5, clean_text(f"(Usual c/ Piezas H - OEE: {m_std.get('OEE', 0):.1f}% | Disp: {m_std.get('DISPONIBILIDAD', 0):.1f}% | Perf: {m_std.get('PERFORMANCE', 0):.1f}% | Cal: {m_std.get('CALIDAD', 0):.1f}%)"))
         pdf.ln(5)
 
 def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
@@ -562,7 +582,7 @@ def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
 # ==========================================
 # 5.A. MOTOR PARA RESUMEN EJECUTIVO (SOLO MENSUAL)
 # ==========================================
-def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_std_pdf, lista_piezas_h=None):
+def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_std_pdf, df_piezas_excluidas):
     theme_color = (44, 62, 80) 
     pdf = ReportePDF("GLOBAL PLANTA - RESUMEN MENSUAL", fecha_str, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -573,11 +593,15 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
     pdf.add_page()
     print_section_title(pdf, "RESUMEN EJECUTIVO: KPI POR PLANTA", theme_color)
 
-    if lista_piezas_h:
-        pdf.set_font("Arial", 'I', 8); pdf.set_text_color(220, 20, 20)
-        piezas_str = ", ".join(lista_piezas_h)
-        pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las piezas H: {piezas_str}"))
-        pdf.ln(3)
+    if not df_piezas_excluidas.empty:
+        piezas_unicas = df_piezas_excluidas['Code'].unique()
+        if len(piezas_unicas) > 0:
+            pdf.set_font("Arial", 'I', 8); pdf.set_text_color(220, 20, 20)
+            piezas_str = ", ".join(sorted(piezas_unicas))
+            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las siguientes piezas H detectadas en la planta: {piezas_str}"))
+            pdf.ln(3)
+
+    is_h_active = not df_piezas_excluidas.empty
 
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
     def get_planta(maq_name):
@@ -619,10 +643,10 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
         return 0, 0, 0, 0
 
     oee_est, disp_est, perf_est, cal_est = calc_metrics(met_planta, 'ESTAMPADO')
-    std_est = calc_metrics(met_planta_std, 'ESTAMPADO') if lista_piezas_h else None
+    std_est = calc_metrics(met_planta_std, 'ESTAMPADO') if is_h_active else None
 
     oee_sol, disp_sol, perf_sol, cal_sol = calc_metrics(met_planta, 'SOLDADURA')
-    std_sol = calc_metrics(met_planta_std, 'SOLDADURA') if lista_piezas_h else None
+    std_sol = calc_metrics(met_planta_std, 'SOLDADURA') if is_h_active else None
 
     def draw_kpi_row(pdf_obj, y, title, oee, disp, perf, cal, theme_col, std_metrics=None):
         pdf_obj.set_xy(10, y)
@@ -720,7 +744,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
                 y_curr = pdf.get_y() + 5
                 
             oee_g, disp_g, perf_g, cal_g = calc_metrics(met_grupo, g)
-            std_g = calc_metrics(met_grupo_std, g) if lista_piezas_h else None
+            std_g = calc_metrics(met_grupo_std, g) if is_h_active else None
 
             y_curr = draw_kpi_row(pdf, y_curr, f"GRUPO: {g}", oee_g, disp_g, perf_g, cal_g, theme_color, std_g)
             y_curr += 8
@@ -744,7 +768,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
             oee_maq_individual = (row_maq['DISPONIBILIDAD'] * row_maq['PERFORMANCE'] * row_maq['CALIDAD']) / 10000
 
             std_maq_ind = None
-            if lista_piezas_h:
+            if is_h_active:
                 row_std = df_met_std[df_met_std['Máquina'] == maq]
                 if not row_std.empty:
                     row_std = row_std.iloc[0]
@@ -788,7 +812,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, df_metrics_
 # ==========================================
 # 5.B. MOTOR GENERADOR DEL PDF PRINCIPAL (Detallado)
 # ==========================================
-def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf, df_horarios, df_metrics_std_pdf, lista_piezas_h=None):
+def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf, df_horarios, df_metrics_std_pdf, df_piezas_excluidas):
     if area.upper() == "ESTAMPADO":
         theme_color = (15, 76, 129); comp_color = (52, 152, 219)  
         chart_bars = ['#003366', '#3498DB', '#AED6F1']; pie_colors = px.colors.sequential.Blues_r
@@ -865,11 +889,14 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         # 1. RESUMEN OEE DEL GRUPO
         check_space(pdf, 30); print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
         
-        if lista_piezas_h:
+        piezas_excluidas_grupo = df_piezas_excluidas[df_piezas_excluidas['Máquina'].isin(maq_del_grupo)]['Code'].unique() if not df_piezas_excluidas.empty else []
+        is_h_active = len(piezas_excluidas_grupo) > 0
+
+        if is_h_active:
             pdf.set_font("Arial", 'I', 8)
             pdf.set_text_color(220, 20, 20)
-            piezas_str = ", ".join(lista_piezas_h)
-            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las piezas H: {piezas_str}"))
+            piezas_str = ", ".join(sorted(piezas_excluidas_grupo))
+            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores principales excluyendo los tiempos y producción de las siguientes piezas H detectadas en este grupo: {piezas_str}"))
             pdf.ln(2)
 
         g_plan = 0; g_op = 0; g_buenas = 0; g_totales = 0
@@ -893,7 +920,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
                 g_perf_w += metrics['PERFORMANCE'] * t_o
             
             # MÉTRICAS ESTÁNDAR (Para comparativa)
-            if lista_piezas_h:
+            if is_h_active:
                 metrics_std = obtener_metricas_maquina(maq, df_metrics_std_pdf)
                 if metrics_std:
                     maquinas_metricas_std[maq] = metrics_std
@@ -910,7 +937,7 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
         m_g = {'OEE': g_oee, 'DISPONIBILIDAD': g_disp, 'PERFORMANCE': g_perf, 'CALIDAD': g_cal}
         
         m_g_std = None
-        if lista_piezas_h:
+        if is_h_active:
             g_disp_s = g_disp_w_std / g_plan_std if g_plan_std > 0 else 0
             g_perf_s = g_perf_w_std / g_op_std if g_op_std > 0 else 0
             g_cal_s = (g_buenas_std / g_totales_std) * 100 if g_totales_std > 0 else 0 
@@ -1731,7 +1758,10 @@ with st.expander("🛠️ Editor Manual de Datos (Ajustes antes de exportar el P
 # --- APLICAR FILTRO DE MÁQUINAS OCULTAS AL RESTO DEL CÓDIGO ---
 if maq_ocultas:
     df_metrics = df_metrics[~df_metrics['Máquina'].isin(maq_ocultas)]
-    df_metrics_std = df_metrics_std[~df_metrics_std['Máquina'].isin(maq_ocultas)]
+    if not df_metrics_std.empty:
+        df_metrics_std = df_metrics_std[~df_metrics_std['Máquina'].isin(maq_ocultas)]
+    if not df_piezas_excluidas.empty:
+        df_piezas_excluidas = df_piezas_excluidas[~df_piezas_excluidas['Máquina'].isin(maq_ocultas)]
     df_raw = df_raw[~df_raw['Máquina'].isin(maq_ocultas)]
     pdf_df_prod_target = pdf_df_prod_target[~pdf_df_prod_target['Máquina'].isin(maq_ocultas)]
     df_trend = df_trend[~df_trend['Máquina'].isin(maq_ocultas)]
@@ -1756,7 +1786,7 @@ with col_p3:
         if st.button("Reporte ESTAMPADO", use_container_width=True):
             with st.spinner("Generando PDF Estampado..."):
                 try:
-                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, df_metrics_std, lista_piezas_h)
+                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, df_metrics_std, df_piezas_excluidas)
                     st.download_button("Descargar Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -1765,7 +1795,7 @@ with col_p3:
         if st.button("Reporte SOLDADURA", use_container_width=True):
             with st.spinner("Generando PDF Soldadura..."):
                 try:
-                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, df_metrics_std, lista_piezas_h)
+                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, df_metrics_std, df_piezas_excluidas)
                     st.download_button("Descargar Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -1775,7 +1805,7 @@ with col_p3:
             if st.button("Resumen Ejecutivo", use_container_width=True):
                 with st.spinner("Generando Resumen Ejecutivo Global..."):
                     try:
-                        pdf_resumen = crear_pdf_resumen_ejecutivo(pdf_label, df_trend, df_metrics, df_metrics_std, lista_piezas_h)
+                        pdf_resumen = crear_pdf_resumen_ejecutivo(pdf_label, df_trend, df_metrics, df_metrics_std, df_piezas_excluidas)
                         st.download_button("Descargar Resumen", data=pdf_resumen, file_name=f"Resumen_Global_Planta_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                     except Exception as e:
                         st.error(f"Error generando PDF: {e}")
