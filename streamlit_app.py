@@ -81,10 +81,26 @@ with col_btn:
 st.divider()
 
 # ==========================================
+# FUNCION PARA LEER PIEZAS "H" DE GOOGLE SHEETS
+# ==========================================
+@st.cache_data(ttl=3600)
+def get_piezas_h():
+    # URL de exportación CSV directa desde Google Sheets
+    url = "https://docs.google.com/spreadsheets/d/1mLnIC8B7mwmFZwthO0A32H3ZFfXSKt7vIUMBXEZxDJ0/export?format=csv&gid=0"
+    try:
+        df_h = pd.read_csv(url, header=None)
+        piezas = df_h.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+        # Filtramos encabezados si los hay
+        return [p for p in piezas if p and p.lower() not in ['codigo', 'código', 'pieza', 'piezas']]
+    except Exception as e:
+        st.error(f"Error al cargar piezas H desde Google Sheets: {e}")
+        return []
+
+# ==========================================
 # 2. CARGA Y LIMPIEZA DE DATOS DESDE SQL SERVER
 # ==========================================
 @st.cache_data(ttl=300)
-def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
+def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None, lista_piezas_h=None):
     try:
         conn = st.connection("wii_bi", type="sql")
         ini_str = fecha_ini.strftime('%Y-%m-%d')
@@ -93,12 +109,25 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
         df_trend = pd.DataFrame()
         df_horarios = pd.DataFrame()
 
+        # Condicionales para ignorar piezas H
+        prod_where = ""
+        metrics_join = ""
+        metrics_where = ""
+        
+        if lista_piezas_h:
+            piezas_str = ", ".join([f"'{p}'" for p in lista_piezas_h])
+            prod_where = f" AND pr.Code NOT IN ({piezas_str}) "
+            # Para las tablas 03, enlazamos a PRODUCT para poder filtrar por código
+            metrics_join = " LEFT JOIN PRODUCT pr ON p.ProductId = pr.ProductId "
+            metrics_where = f" AND (pr.Code IS NULL OR pr.Code NOT IN ({piezas_str})) "
+
         if tipo_periodo == "Mensual":
             q_prod = f"""
                 SELECT c.Name as Máquina, pr.Code as Código, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
                 FROM PROD_M_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
-                WHERE p.Month = {mes} AND p.Year = {anio} GROUP BY c.Name, pr.Code
+                WHERE p.Month = {mes} AND p.Year = {anio} {prod_where}
+                GROUP BY c.Name, pr.Code
             """
             
             q_metrics = f"""
@@ -109,8 +138,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
                        (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
                        (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
-                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId
-                WHERE p.Month = {mes} AND p.Year = {anio}
+                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
+                WHERE p.Month = {mes} AND p.Year = {anio} {metrics_where}
                 GROUP BY c.Name
             """
 
@@ -135,8 +164,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        SUM(p.ProductiveTime) as T_Operativo,
                        SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                        SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId
-                WHERE p.Year = {anio} AND p.Month <= {mes}
+                FROM PROD_M_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
+                WHERE p.Year = {anio} AND p.Month <= {mes} {metrics_where}
                 GROUP BY p.Month, c.Name
             """
             df_trend = conn.query(q_trend)
@@ -146,7 +175,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                 SELECT c.Name as Máquina, pr.Code as Código, 
                        SUM(p.Good) as Buenas, SUM(p.Rework) as Retrabajo, SUM(p.Scrap) as Observadas
                 FROM PROD_D_01 p JOIN CELL c ON p.CellId = c.CellId JOIN PRODUCT pr ON p.ProductId = pr.ProductId 
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' GROUP BY c.Name, pr.Code
+                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {prod_where}
+                GROUP BY c.Name, pr.Code
             """
             
             q_metrics = f"""
@@ -157,8 +187,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                        (SUM(p.Availability * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as DISPONIBILIDAD,
                        (SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) / NULLIF(SUM(p.Good + p.Rework + p.Scrap), 0)) as CALIDAD,
                        (SUM(p.Oee * (p.ProductiveTime + p.DownTime)) / NULLIF(SUM(p.ProductiveTime + p.DownTime), 0)) as OEE
-                FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId
-                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
+                FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
+                WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {metrics_where}
                 GROUP BY c.Name
             """
             
@@ -226,8 +256,8 @@ def fetch_data_from_db(fecha_ini, fecha_fin, tipo_periodo, mes=None, anio=None):
                            SUM(p.ProductiveTime) as T_Operativo,
                            SUM(p.Quality * (p.Good + p.Rework + p.Scrap)) as Cal_Num,
                            SUM(p.Good + p.Rework + p.Scrap) as Piezas_Totales
-                    FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId
-                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}'
+                    FROM PROD_D_03 p JOIN CELL c ON p.CellId = c.CellId {metrics_join}
+                    WHERE p.Date BETWEEN '{ini_str}' AND '{fin_str}' {metrics_where}
                     GROUP BY p.Date, c.Name
                 """
                 df_trend = conn.query(q_trend_semanal)
@@ -341,7 +371,11 @@ with col_p2:
         pdf_fin = pd.to_datetime(f"{pdf_anio}-{pdf_mes}-{last_day}")
         pdf_label = f"{mes_sel} {pdf_anio}"; file_label = f"{mes_sel}_{pdf_anio}"
 
-df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics, df_horarios = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio)
+    st.markdown("---")
+    ignorar_piezas_h = st.checkbox("Ignorar piezas H (Proyecto H)", value=False)
+    lista_piezas_h = get_piezas_h() if ignorar_piezas_h else []
+
+df_raw, pdf_df_prod_target, pdf_df_op_target, df_trend, df_metrics, df_horarios = fetch_data_from_db(pdf_ini, pdf_fin, pdf_tipo, mes=pdf_mes, anio=pdf_anio, lista_piezas_h=lista_piezas_h)
 
 # ==========================================
 # 4. FUNCIONES HELPER PDF
@@ -440,7 +474,7 @@ def add_image_safe(pdf, img_path, w_mm, h_mm, center=True):
 # ==========================================
 # 5.A. MOTOR PARA RESUMEN EJECUTIVO (SOLO MENSUAL)
 # ==========================================
-def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
+def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf, lista_piezas_h=None):
     theme_color = (44, 62, 80) 
     pdf = ReportePDF("GLOBAL PLANTA - RESUMEN MENSUAL", fecha_str, theme_color)
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -450,6 +484,12 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
     # ---------------------------------------------------------
     pdf.add_page()
     print_section_title(pdf, "RESUMEN EJECUTIVO: KPI POR PLANTA", theme_color)
+
+    if lista_piezas_h:
+        pdf.set_font("Arial", 'I', 8); pdf.set_text_color(220, 20, 20)
+        piezas_str = ", ".join(lista_piezas_h)
+        pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores ignorando la producción de las piezas H: {piezas_str}"))
+        pdf.ln(3)
 
     mapa_limpio = {str(k).strip().upper(): v for k, v in MAQUINAS_MAP.items()}
     def get_planta(maq_name):
@@ -639,7 +679,7 @@ def crear_pdf_resumen_ejecutivo(fecha_str, df_trend, df_metrics_pdf):
 # ==========================================
 # 5.B. MOTOR GENERADOR DEL PDF PRINCIPAL (Detallado)
 # ==========================================
-def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf, df_horarios):
+def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_tipo, df_trend, df_metrics_pdf, df_horarios, lista_piezas_h=None):
     if area.upper() == "ESTAMPADO":
         theme_color = (15, 76, 129); comp_color = (52, 152, 219)  
         chart_bars = ['#003366', '#3498DB', '#AED6F1']; pie_colors = px.colors.sequential.Blues_r
@@ -715,6 +755,15 @@ def crear_pdf(area, label_reporte, op_target_df, prod_target_df, df_pdf_raw, p_t
 
         # 1. RESUMEN OEE DEL GRUPO
         check_space(pdf, 30); print_section_title(pdf, "1. Resumen OEE del Grupo", theme_color)
+        
+        # Insertar nota aclaratoria de piezas H omitidas si corresponde
+        if lista_piezas_h:
+            pdf.set_font("Arial", 'I', 8)
+            pdf.set_text_color(220, 20, 20)
+            piezas_str = ", ".join(lista_piezas_h)
+            pdf.multi_cell(0, 4, clean_text(f"* Nota: Se calculan indicadores ignorando la producción de las piezas H: {piezas_str}"))
+            pdf.ln(2)
+
         g_plan = 0; g_op = 0; g_buenas = 0; g_totales = 0
         g_disp_w = 0; g_perf_w = 0
         maquinas_metricas = {}
@@ -1574,7 +1623,7 @@ with col_p3:
         if st.button("Reporte ESTAMPADO", use_container_width=True):
             with st.spinner("Generando PDF Estampado..."):
                 try:
-                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios)
+                    pdf_data = crear_pdf("Estampado", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, lista_piezas_h)
                     st.download_button("Descargar Estampado", data=pdf_data, file_name=f"Estampado_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -1583,7 +1632,7 @@ with col_p3:
         if st.button("Reporte SOLDADURA", use_container_width=True):
             with st.spinner("Generando PDF Soldadura..."):
                 try:
-                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios)
+                    pdf_data = crear_pdf("Soldadura", pdf_label, pdf_df_op_target, pdf_df_prod_target, df_raw, pdf_tipo, df_trend, df_metrics, df_horarios, lista_piezas_h)
                     st.download_button("Descargar Soldadura", data=pdf_data, file_name=f"Soldadura_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                 except Exception as e:
                     st.error(f"Error generando PDF: {e}")
@@ -1593,7 +1642,7 @@ with col_p3:
             if st.button("Resumen Ejecutivo", use_container_width=True):
                 with st.spinner("Generando Resumen Ejecutivo Global..."):
                     try:
-                        pdf_resumen = crear_pdf_resumen_ejecutivo(pdf_label, df_trend, df_metrics)
+                        pdf_resumen = crear_pdf_resumen_ejecutivo(pdf_label, df_trend, df_metrics, lista_piezas_h)
                         st.download_button("Descargar Resumen", data=pdf_resumen, file_name=f"Resumen_Global_Planta_{file_label}.pdf", mime="application/pdf", use_container_width=True)
                     except Exception as e:
                         st.error(f"Error generando PDF: {e}")
