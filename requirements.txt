@@ -4,5 +4,5 @@ plotly
 fpdf
 SQLAlchemy
 pymssql
-kaleido==0.2.1.post1
+kaleido==0.1.0.post1
 starlette<0.40.0
