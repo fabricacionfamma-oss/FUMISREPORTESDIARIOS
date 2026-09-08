@@ -1,6 +1,6 @@
 streamlit>=1.39.0
 pandas
-plotly
+plotly<6.0.0
 fpdf
 SQLAlchemy
 pymssql
